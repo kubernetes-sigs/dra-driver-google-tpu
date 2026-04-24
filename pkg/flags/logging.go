@@ -21,11 +21,9 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/urfave/cli/v2"
-
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/component-base/featuregate"
 	logsapi "k8s.io/component-base/logs/api/v1"
-
 	_ "k8s.io/component-base/logs/json/register" // for JSON log output support
 )
 

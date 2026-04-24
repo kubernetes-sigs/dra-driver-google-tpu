@@ -1,0 +1,24 @@
+version: "2"
+run:
+  tests: true
+linters:
+  enable:
+    - asciicheck
+    - contextcheck
+    - forcetypeassert
+    - gocritic
+    - godot
+    - misspell
+    - staticcheck
+    - ineffassign
+    - errcheck
+    - govet
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - sigs.k8s.io/dra-driver-google-tpu
+

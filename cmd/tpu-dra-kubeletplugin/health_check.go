@@ -36,7 +36,7 @@ var (
 )
 
 // TPUHealthChecker checks the health of TPUs. Currently the health checker is limit
-// to just checking for the existence of device in the `dev` directory
+// to just checking for the existence of device in the `dev` directory.
 type TPUHealthChecker struct {
 	devices      map[string]AllocatableDevice
 	devDirectory string
@@ -45,7 +45,7 @@ type TPUHealthChecker struct {
 	tpuGen       string
 }
 
-// NewTPUHealthChecker returns a TPUHealthChecker object for a given device name
+// NewTPUHealthChecker returns a TPUHealthChecker object for a given device name.
 func NewTPUHealthChecker(devices AllocatableDevices, state *DeviceState, devDirectory string, tpuGen string) *TPUHealthChecker {
 	hc := &TPUHealthChecker{
 		devices:      make(map[string]AllocatableDevice),
@@ -63,7 +63,7 @@ func NewTPUHealthChecker(devices AllocatableDevices, state *DeviceState, devDire
 	return hc
 }
 
-// Start creates a goRoutine that monitors the devDir for changes
+// Start creates a goRoutine that monitors the devDir for changes.
 func (hc *TPUHealthChecker) Start() error {
 	klog.Info("Starting TPU Health Checker")
 
@@ -129,7 +129,7 @@ func (hc *TPUHealthChecker) monitorDevDir() error {
 	}
 }
 
-// Stop the listening go routine
+// Stop the listening go routine.
 func (hc *TPUHealthChecker) Stop() {
 	hc.stop <- true
 	<-hc.stop

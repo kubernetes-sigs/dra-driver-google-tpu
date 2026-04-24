@@ -25,11 +25,10 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/google/uuid"
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
-
-	"github.com/google/uuid"
 	cdispec "tags.cncf.io/container-device-interface/specs-go"
 )
 

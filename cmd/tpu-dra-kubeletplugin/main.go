@@ -26,14 +26,12 @@ import (
 	"syscall"
 
 	"github.com/urfave/cli/v2"
-
 	"k8s.io/apimachinery/pkg/util/sets"
 	coreclientset "k8s.io/client-go/kubernetes"
+	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
 
 	"sigs.k8s.io/dra-driver-google-tpu/pkg/flags"
-
-	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 )
 
 const (

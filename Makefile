@@ -22,7 +22,7 @@ include $(CURDIR)/common.mk
 CMDS := $(patsubst ./cmd/%/,%,$(sort $(dir $(wildcard ./cmd/*/))))
 CMD_TARGETS := $(patsubst %,cmd-%, $(CMDS))
 
-CHECK_TARGETS := assert-fmt vet lint ineffassign misspell
+CHECK_TARGETS := lint
 MAKE_TARGETS := binaries build check vendor fmt test cmds coverage $(CHECK_TARGETS)
 
 TARGETS := $(MAKE_TARGETS) $(CMD_TARGETS)
@@ -65,17 +65,8 @@ assert-fmt:
 		rm fmt.out; \
 	fi
 
-ineffassign:
-	ineffassign $(MODULE)/...
-
 lint:
 	golangci-lint run ./...
-
-misspell:
-	misspell $(MODULE)/...
-
-vet:
-	go vet $(MODULE)/...
 
 COVERAGE_FILE := coverage.out
 test: build cmds

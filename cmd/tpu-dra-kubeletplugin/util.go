@@ -46,7 +46,7 @@ var (
 	acceleratorRegex     = regexp.MustCompile(`^tpu\d+[a-z]?$`)
 	pastAcceleratorRegex = regexp.MustCompile(`^tpu-v\d+([ep]?-slice)?((?:-lite)?-(device|podslice))?$`)
 
-	// The tpugen's value should follow the format of CloudTPU "TPU_ACCELERATOR_TYPE" : relative ascending order of release
+	// The tpugen's value should follow the format of CloudTPU "TPU_ACCELERATOR_TYPE" : relative ascending order of release.
 	validTPUGenerations = map[string]int{
 		"v3":        0,
 		"v4":        1,
@@ -56,7 +56,7 @@ var (
 		"v5p":       5,
 		"v6e":       6,
 	}
-	// chips per node -> chips per dimension
+	// chips per node -> chips per dimension.
 	requestedChipCountToChipsPerDimNumaAligned = map[int][]int64{
 		1: {1, 1, 1},
 		2: {1, 2, 1},
@@ -150,8 +150,6 @@ func IsValidSubSliceTopology(topology string, subSliceTopology string) (bool, er
 	}
 	return true, nil
 }
-
-
 
 // InitEnvs initializes a map of environment variables containing required
 // metadata values for TPU workloads to run.
@@ -279,7 +277,7 @@ func AcceleratorGen(accelerator string) (string, error) {
 
 // numCores calculates the number of cores based on the topology.
 // Lite = 1 core per chip
-// Non-lite = 2 cores per chip
+// Non-lite = 2 cores per chip.
 func numCores(tpuGen string, topologyDims []int64) (int, error) {
 	// Calculate total chips in the podslice.
 	totalChips := calculateTotalChips(topologyDims)
@@ -346,7 +344,7 @@ func getChipsPerHostBounds(requestedChipCount int) (string, error) {
 	return strings.Join(tmp, ","), nil
 }
 
-// Add podslice or slice Envs
+// Add podslice or slice Envs.
 func addPodsliceOrSliceEnvs(tpuGen, enableICIResiliency string, requestedChipCount int, topologyDims []int64, envs map[string]string) error {
 	hostBounds, err := calculateHostBounds(requestedChipCount, topologyDims)
 	if err != nil {
@@ -467,10 +465,4 @@ func applyNetworkSettings(parentDir string) error {
 		return nil
 	}
 	return errors.New(strings.Join(errs, "; "))
-}
-
-// isEalierGeneration compares two TPU generations and returns true if gen1 is earlier than gen2.
-func isEalierGeneration(gen1, gen2 string) bool {
-	rank1, rank2 := validTPUGenerations[gen1], validTPUGenerations[gen2]
-	return rank1 < rank2
 }
