@@ -5,6 +5,7 @@
 *.so
 *.dylib
 bin/*
+/tpu-dra-kubeletplugin
 Dockerfile.cross
 
 # Test binary, built with `go test -c`
