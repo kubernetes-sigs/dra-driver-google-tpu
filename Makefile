@@ -53,18 +53,6 @@ fmt:
 	go list -f '{{.Dir}}' $(MODULE)/... \
 		| xargs gofmt -s -l -w
 
-assert-fmt:
-	go list -f '{{.Dir}}' $(MODULE)/... \
-		| xargs gofmt -s -l > fmt.out
-	@if [ -s fmt.out ]; then \
-		echo "\nERROR: The following files are not formatted:\n"; \
-		cat fmt.out; \
-		rm fmt.out; \
-		exit 1; \
-	else \
-		rm fmt.out; \
-	fi
-
 lint:
 	golangci-lint run ./...
 
