@@ -22,7 +22,7 @@ include $(CURDIR)/common.mk
 CMDS := $(patsubst ./cmd/%/,%,$(sort $(dir $(wildcard ./cmd/*/))))
 CMD_TARGETS := $(patsubst %,cmd-%, $(CMDS))
 
-CHECK_TARGETS := lint
+CHECK_TARGETS := lint helm-lint
 MAKE_TARGETS := binaries build check vendor fmt test cmds coverage $(CHECK_TARGETS)
 
 TARGETS := $(MAKE_TARGETS) $(CMD_TARGETS)
@@ -55,6 +55,9 @@ fmt:
 
 lint:
 	golangci-lint run ./...
+
+helm-lint:
+	helm lint --strict deployments/helm/dra-driver-google-tpu
 
 COVERAGE_FILE := coverage.out
 test: build cmds
