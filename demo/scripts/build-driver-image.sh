@@ -27,36 +27,6 @@ set -o pipefail
 
 source "${CURRENT_DIR}/common.sh"
 
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    -r|--registry)
-      DRIVER_IMAGE_REGISTRY="$2"
-      shift # past argument
-      shift # past value
-      ;;
-    -i|--image)
-      DRIVER_IMAGE_NAME="$2"
-      shift # past argument
-      shift # past value
-      ;;
-    -t|--tag)
-      DRIVER_IMAGE_TAG="$2"
-      shift # past argument
-      shift # past value
-      ;;
-    --multi-arch)
-      MULTI_ARCH=true
-      shift # past argument
-      ;;
-    -*|--*)
-      echo "Unknown option $1"
-      exit 1
-      ;;
-  esac
-done
-
-echo "REGISTRY"=${REGISTRY}
-
 # Create a temorary directory to hold all the artifacts we need for building the image
 TMP_DIR="$(mktemp -d)"
 cleanup() {
@@ -65,17 +35,22 @@ cleanup() {
 trap cleanup EXIT
 
 # Go back to the root directory of this repo
-cd ${CURRENT_DIR}/../..
+cd "${CURRENT_DIR}/../.."
 
-# Set build variables
-export REGISTRY=${DRIVER_IMAGE_REGISTRY}
-export IMAGE=${DRIVER_IMAGE_NAME}
-export TAG=${DRIVER_IMAGE_TAG}
-export CONTAINER_TOOL="${CONTAINER_TOOL}"
+# Variables REGISTRY, IMAGE, and TAG are inherited from environment or set as defaults in common.sh
 
-if [[ "${MULTI_ARCH}" == "true" ]]; then
-  make -f deployments/container/Makefile multi-arch-all
+echo "REGISTRY=${REGISTRY}"
+echo "IMAGE=${IMAGE}"
+echo "TAG=${TAG}"
+
+if [[ "${MULTI_ARCH:-}" == "true" ]]; then
+  make -f deployments/container/Makefile container-multi-arch \
+    REGISTRY="${REGISTRY}" \
+    IMAGE="${IMAGE}" \
+    TAG="${TAG}"
 else
-  # Regenerate the CRDs and build the container image
-  make -f deployments/container/Makefile
+  make -f deployments/container/Makefile docker-build \
+    REGISTRY="${REGISTRY}" \
+    IMAGE="${IMAGE}" \
+    TAG="${TAG}"
 fi

@@ -25,12 +25,12 @@ SCRIPTS_DIR="$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)"
 : ${DRIVER_NAME:=dra-driver-google-tpu}
 
 # The registry, image and tag for the Google TPU DRA driver
-: ${DRIVER_IMAGE_REGISTRY:="registry.k8s.io/dra-driver-google-tpu"}
-: ${DRIVER_IMAGE_NAME:="${DRIVER_NAME}"}
-: ${DRIVER_IMAGE_TAG:="v$(cat $(git rev-parse --show-toplevel)/deployments/helm/${DRIVER_NAME}/Chart.yaml | grep appVersion | sed 's/"//g' | sed -n 's/^appVersion: //p')"}
+: ${REGISTRY:="registry.k8s.io/dra-driver-google-tpu"}
+: ${IMAGE:="${DRIVER_NAME}"}
+: ${TAG:="v$(cat $(git rev-parse --show-toplevel)/deployments/helm/${DRIVER_NAME}/Chart.yaml | grep appVersion | sed 's/"//g' | sed -n 's/^appVersion: //p')"}
 
 # The derived name of the driver image to build
-: ${DRIVER_IMAGE:="${DRIVER_IMAGE_REGISTRY}/${DRIVER_IMAGE_NAME}:${DRIVER_IMAGE_TAG}"}
+: ${DRIVER_IMAGE:="${REGISTRY}/${IMAGE}:${TAG}"}
 
 # Container tool, e.g. docker/podman
 if [[ -z "${CONTAINER_TOOL}" ]]; then
