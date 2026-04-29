@@ -66,3 +66,13 @@ test: build cmds
 coverage: test
 	cat $(COVERAGE_FILE) | grep -v "_mock.go" > $(COVERAGE_FILE).no-mocks
 	go tool cover -func=$(COVERAGE_FILE).no-mocks
+
+image-build:
+	REGISTRY=$(REGISTRY) TAG=$(TAG) demo/scripts/build-driver-image.sh
+
+image-push:
+	REGISTRY=$(REGISTRY) TAG=$(TAG) demo/scripts/push-driver-image.sh
+
+release:
+	REGISTRY=$(REGISTRY) TAG=$(TAG) MULTI_ARCH=true demo/scripts/build-driver-image.sh
+	REGISTRY=$(REGISTRY) TAG=$(TAG) MULTI_ARCH=true demo/scripts/push-driver-image.sh

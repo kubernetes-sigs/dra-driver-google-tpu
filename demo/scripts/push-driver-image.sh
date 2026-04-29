@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-
 # Copyright The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,11 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This scripts invokes `kind build image` so that the resulting
-# image has a containerd with CDI support.
-#
-# Usage: kind-build-image.sh <tag of generated image>
-
 # A reference to the current directory where this script is located
 CURRENT_DIR="$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)"
 
@@ -27,25 +21,25 @@ set -o pipefail
 
 source "${CURRENT_DIR}/common.sh"
 
-# If PUSH_IMAGE is not set, default it to true
-: ${PUSH_IMAGE:="true"}
+# Variables REGISTRY, IMAGE, and TAG are inherited from environment or set as defaults in common.sh
 
-# Build the Google TPU DRA driver image
-echo "Building dra-driver-google-tpu container image"
-echo ${SCRIPTS_DIR}
-${SCRIPTS_DIR}/build-driver-image.sh
+echo "REGISTRY=${REGISTRY}"
+echo "IMAGE=${IMAGE}"
+echo "TAG=${TAG}"
 
 # Go back to the root directory of this repo
-cd ${CURRENT_DIR}/../..
+cd "${CURRENT_DIR}/../.."
 
-if [ "${PUSH_IMAGE}" = "true" ]; then
-    echo "Pushing container image to GCP Artifact Registry"
-    make -f deployments/container/Makefile docker-push IMAGE="${DRIVER_IMAGE}"
+if [[ "${MULTI_ARCH:-}" == "true" ]]; then
+  # Push multi-arch images and manifest
+  # deployments/container/Makefile assumes IMAGE is just the name for these targets
+  make -f deployments/container/Makefile push-all-individual build-multi-arch push-multi-arch \
+    REGISTRY="${REGISTRY}" \
+    IMAGE="${IMAGE}" \
+    TAG="${TAG}"
 else
-    echo "Skipping image push to registry as PUSH_IMAGE is set to \"${PUSH_IMAGE}\""
+  # Push single arch
+  # deployments/container/Makefile docker-push target assumes IMAGE is the full tag
+  make -f deployments/container/Makefile docker-push \
+    IMAGE="${REGISTRY}/${IMAGE}:${TAG}"
 fi
-
-set +x
-printf '\033[0;32m'
-echo "Driver build complete: ${DRIVER_IMAGE}"
-printf '\033[0m'

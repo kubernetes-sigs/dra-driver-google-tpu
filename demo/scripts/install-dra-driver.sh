@@ -23,8 +23,8 @@ set -o pipefail
 source "${CURRENT_DIR}/common.sh"
 
 helm upgrade -i --create-namespace --namespace dra-driver-google-tpu dra-driver-google-tpu ${PROJECT_DIR}/deployments/helm/dra-driver-google-tpu \
-  --set image.repository=${DRIVER_IMAGE_REGISTRY}/${DRIVER_IMAGE_NAME} \
-  --set image.tag=${DRIVER_IMAGE_TAG} \
+  --set image.repository=${REGISTRY}/${IMAGE} \
+  --set image.tag=${TAG} \
   --set image.pullPolicy=IfNotPresent \
   --set cdi.enabled=true \
   --set cdi.default=true \
