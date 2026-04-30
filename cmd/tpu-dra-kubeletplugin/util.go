@@ -40,6 +40,7 @@ const (
 	ICIResiliencyEnv             = "ENABLE_ICI_RESILIENCY"
 	ProvisionOnlyTopologyMode    = "PROVISION_ONLY"
 	RootDirectory                = "/"
+	NodeIPEnv                    = "NODE_IP"
 )
 
 var (
@@ -190,7 +191,12 @@ func InitEnvs(opts InitEnvOptions) (map[string]string, error) {
 		envs["TPU_ACCELERATOR_TYPE"] = acceleratorTypeConverted
 	}
 
-	envs["VBAR_CONTROL_SERVICE_URL"] = "unix:///var/run/tpu-plugin/vbar.sock"
+	nodeIp, err := GetEnvName(NodeIPEnv)
+	if err != nil {
+		klog.Infof("$NODE_IP is not set in env")
+	} else {
+		envs["VBAR_CONTROL_SERVICE_URL"] = nodeIp + ":8353"
+	}
 
 	if opts.EnableDeviceSpreading && opts.IsPriviledged && len(opts.VisibleChipIds) > 0 {
 		envs["TPU_VISIBLE_CHIPS"] = strings.Join(opts.VisibleChipIds, ",")
@@ -213,6 +219,14 @@ func InitEnvs(opts InitEnvOptions) (map[string]string, error) {
 		addSingleHostEnvs(envs)
 	}
 	return envs, nil
+}
+
+func GetEnvName(envName string) (string, error) {
+	env := os.Getenv(envName)
+	if len(env) == 0 {
+		return "", fmt.Errorf("empty %s environment variable", envName)
+	}
+	return env, nil
 }
 
 func ChipCount(chipCount string) (int, error) {
