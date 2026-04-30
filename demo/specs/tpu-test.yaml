@@ -31,6 +31,10 @@ metadata:
   labels:
     app: pod
 spec:
+  tolerations:
+  - key: "google.com/tpu"
+    operator: "Exists"
+    effect: "NoSchedule"
   containers:
   - name: ctr0
     image: busybox:latest
@@ -40,8 +44,10 @@ spec:
         - |
           echo "Environment Variables:"
           env
-          echo "Listing mounts"
+          echo "Listing v4 mounts"
           ls /dev/ | grep 'accel'
+          echo "Listing v5+ mounts"
+          ls /dev/vfio
           echo "Listing log mounts:"
           ls /tmp
           echo "Sleeping indefinitely..."
