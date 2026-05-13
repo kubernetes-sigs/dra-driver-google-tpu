@@ -120,10 +120,10 @@ kubectl get pods -n tpu-test
 
 Then verify that the TPU devices were correctly injected into the pod:
 ```bash
-for pod in $(kubectl get pod -n tpu-test --output=jsonpath='{.items[*].metadata.name}'); do \
-    for ctr in $(kubectl get pod -n tpu-test ${pod} -o jsonpath='{.spec.containers[*].name}'); do \
+for pod in $(kubectl get pod --output=jsonpath='{.items[*].metadata.name}' -n tpu-test); do \
+    for ctr in $(kubectl get pod ${pod} -o jsonpath='{.spec.containers[*].name}' -n tpu-test); do \
       echo "${pod} ${ctr}:"
-      kubectl exec -n tpu-test ${pod} -c ${ctr} -- ls -l /dev/ | grep -E "accel|tpu" || echo "No TPU devices found"
+      kubectl exec ${pod} -c ${ctr} -n tpu-test -- ls -l /dev/ | grep -E "accel|tpu" || echo "No TPU devices found"
     done
 done
 ```
@@ -182,12 +182,46 @@ kubectl get pods -n tpu-test
 
 Then verify that the TPU devices were correctly injected into the pod:
 ```bash
-for pod in $(kubectl get pod -n tpu-test --output=jsonpath='{.items[*].metadata.name}'); do \
-    for ctr in $(kubectl get pod -n tpu-test ${pod} -o jsonpath='{.spec.containers[*].name}'); do \
+for pod in $(kubectl get pod --output=jsonpath='{.items[*].metadata.name}' -n tpu-test); do \
+    for ctr in $(kubectl get pod ${pod} -o jsonpath='{.spec.containers[*].name}' -n tpu-test); do \
       echo "${pod} ${ctr}:"
-      kubectl exec -n tpu-test ${pod} -c ${ctr} -- ls -l /dev/ | grep -E "accel|tpu" || echo "No TPU devices found"
+      kubectl exec ${pod} -c ${ctr} -n tpu-test -- ls -l /dev/ | grep -E "accel|tpu" || echo "No TPU devices found"
     done
 done
+```
+
+#### 5. Send a Test Request
+
+Before sending a request, you must wait for the vLLM model serving server to initialize and load the model weights into the TPU memory (this may take a couple of minutes).
+
+Monitor the logs until the server is ready and listening on port `8000`:
+```bash
+kubectl logs -l app=vllm-tpu --prefix -f -n tpu-test
+```
+
+You should see something like this once the server is fully ready:
+```
+(APIServer pid=1) INFO:     Started server process [1]
+(APIServer pid=1) INFO:     Waiting for application startup.
+(APIServer pid=1) INFO:     Application startup complete.
+```
+
+Once the server is ready, port-forward the service to your local machine in a separate terminal:
+```bash
+kubectl port-forward service/vllm-service 8000:8000 -n tpu-test
+```
+
+Then, in another terminal, send a test request to the model using `curl`:
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen2-1.5B",
+    "messages": [
+      {"role": "user", "content": "San Francisco is a"}
+    ],
+    "max_tokens": 50
+  }'
 ```
 
 ---

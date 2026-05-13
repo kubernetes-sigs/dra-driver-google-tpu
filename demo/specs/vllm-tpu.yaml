@@ -35,9 +35,10 @@ spec:
       labels:
         app: vllm-tpu
     spec:
-      nodeSelector:
-        cloud.google.com/gke-tpu-topology: 2x2x1
-        cloud.google.com/gke-tpu-accelerator: tpu-v4-podslice
+      tolerations:
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
       containers:
       - name: vllm-tpu
         image: docker.io/vllm/vllm-tpu:2e33fe419186c65a18da6668972d61d7bbc31564
@@ -50,11 +51,6 @@ spec:
         env:
           - name: HUGGING_FACE_HUB_TOKEN
             value: "REPLACE_WITH_YOUR_HUGGING_FACE_TOKEN"
-        ports:
-        - containerPort: 8471
-        - containerPort: 8431
-        securityContext:
-          privileged: true
         resources:
           claims:
           - name: tpus
