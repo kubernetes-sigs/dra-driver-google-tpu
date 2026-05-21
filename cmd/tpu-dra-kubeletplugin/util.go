@@ -133,18 +133,22 @@ func IsValidSubSliceTopology(topology string, subSliceTopology string) (bool, er
 	if _, ok := validSubsliceTopologySet[subSliceTopology]; !ok {
 		return false, fmt.Errorf("invalid value for subSliceTopology: %s", subSliceTopology)
 	}
-	// subSliceTopology mismatch with node topology
-	dims := strings.Split(topology, "x")
-	subDims := strings.Split(subSliceTopology, "x")
-	if len(dims) != len(subDims) {
-		return false, fmt.Errorf("invalid value for subSliceTopology: %s, dimension mismatches", subSliceTopology)
+
+	// Normalize node topology
+	dims, err := getTopologyDims(topology)
+	if err != nil {
+		return false, fmt.Errorf("invalid node topology %s: %w", topology, err)
 	}
+
+	// Normalize subslice topology
+	subDims, err := getTopologyDims(subSliceTopology)
+	if err != nil {
+		return false, fmt.Errorf("invalid value for subSliceTopology %s: %w", subSliceTopology, err)
+	}
+
 	for i := range dims {
-		d1, _ := strconv.Atoi(dims[i])      // From control plane
-		d2, err := strconv.Atoi(subDims[i]) // From user input
-		if err != nil {
-			return false, fmt.Errorf("invalid value for subSliceTopology: %s", subSliceTopology)
-		}
+		d1 := dims[i]    // From control plane (normalized)
+		d2 := subDims[i] // From user input (normalized)
 		if d2 > d1 {
 			return false, fmt.Errorf("invalid value for subSliceTopology: %s, subSliceTopology shouldn't be larger than topology", subSliceTopology)
 		}
@@ -258,6 +262,7 @@ func convertAcceleratorType(tpuGen string, topologyDims []int64) (string, error)
 // accelerator: tpu-v5-lite-podslice; return: v5litepod
 // accelerator: tpu-v5p-slice; return: v5p
 // accelerator: tpu-v6e-slice; return: v6e
+// reference: https://docs.cloud.google.com/kubernetes-engine/docs/concepts/plan-tpus#standard
 func AcceleratorGen(accelerator string) (string, error) {
 	if acceleratorRegex.MatchString(accelerator) {
 		return accelerator, nil
@@ -306,6 +311,10 @@ func numCores(tpuGen string, topologyDims []int64) (int, error) {
 }
 
 func calculateHostBounds(requestedChipCount int, topologyDims []int64) (string, error) {
+	if len(topologyDims) != 3 {
+		return "", fmt.Errorf("invalid topology dimensions: expected 3, got %d", len(topologyDims))
+	}
+
 	// Get chips per dimension from the chipCount.
 	trayChipNumPerDim, exists := requestedChipCountToChipsPerDimNumaAligned[requestedChipCount]
 	if !exists {
@@ -342,6 +351,9 @@ func getTopologyDims(topology string) ([]int64, error) {
 	// Add 3rd dimension of 1 to 2D topologies (e.g. 2x2 -> 2x2x1).
 	if len(topologyDims) == 2 {
 		topologyDims = append(topologyDims, int64(1))
+	}
+	if len(topologyDims) != 3 {
+		return nil, fmt.Errorf("invalid topology format: %s, must be 2D or 3D", topology)
 	}
 	return topologyDims, nil
 }
