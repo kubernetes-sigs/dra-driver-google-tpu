@@ -66,39 +66,37 @@ And show the initial state of available TPU devices on the worker node:
 $ kubectl get resourceslice -o yaml
 apiVersion: v1
 items:
-- apiVersion: resource.k8s.io/v1beta1
+- apiVersion: resource.k8s.io/v1
   kind: ResourceSlice
   metadata:
     creationTimestamp: "2025-01-21T18:49:28Z"
-    generateName: kind-node-
+    generateName: kind-worker-
     generation: 1
-    name: kind-node-jh8t6
+    name: kind-worker-jh8t6
     resourceVersion: "3283457"
   spec:
     devices:
-    - basic:
-        attributes:
-          index:
-            int: 0
-          tpuGen:
-            string: v4
-          uuid:
-            string: tpu-25541d5c-7c31-8412-d7cb-c8ebff2fa5c9
+    - attributes:
+        index:
+          int: 0
+        tpuGen:
+          string: v4
+        uuid:
+          string: tpu-25541d5c-7c31-8412-d7cb-c8ebff2fa5c9
       name: accel0
-    - basic:
-        attributes:
-          index:
-            int: 1
-          tpuGen:
-            string: v4
-          uuid:
-            string: tpu-25541d5c-7c31-8412-d7cb-c8ebff2fa5c9
+    - attributes:
+        index:
+          int: 1
+        tpuGen:
+          string: v4
+        uuid:
+          string: tpu-25541d5c-7c31-8412-d7cb-c8ebff2fa5c9
       name: accel1
     driver: tpu.google.com
-    nodeName: kind-control-plane
+    nodeName: kind-worker
     pool:
       generation: 1
-      name: kind-control-plane
+      name: kind-worker
       resourceSliceCount: 1
 kind: List
 metadata:
