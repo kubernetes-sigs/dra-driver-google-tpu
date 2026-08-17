@@ -65,6 +65,12 @@ COVERAGE_FILE := coverage.out
 test: build cmds
 	go test -v -coverprofile=$(COVERAGE_FILE) $(MODULE)/...
 
+# Kind-based end-to-end test for KEP-5004 extended resource requests.
+# Requires docker, kind, helm and kubectl; creates and deletes its own cluster.
+.PHONY: test-e2e-extended-resource
+test-e2e-extended-resource:
+	./test/e2e/extended-resource.sh
+
 coverage: test
 	cat $(COVERAGE_FILE) | grep -v "_mock.go" > $(COVERAGE_FILE).no-mocks
 	go tool cover -func=$(COVERAGE_FILE).no-mocks

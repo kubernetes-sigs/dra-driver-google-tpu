@@ -24,6 +24,13 @@ source "${CURRENT_DIR}/common.sh"
 
 HELM="${HELM:-helm}"
 
+# Optionally map the DeviceClass to a classic extended resource name
+# (KEP-5004), e.g. EXTENDED_RESOURCE_NAME=google.com/tpu.
+EXTRA_HELM_ARGS=()
+if [[ -n "${EXTENDED_RESOURCE_NAME:-}" ]]; then
+  EXTRA_HELM_ARGS+=(--set "deviceClass.extendedResourceName=${EXTENDED_RESOURCE_NAME}")
+fi
+
 ${HELM} upgrade -i --create-namespace --namespace dra-driver-google-tpu dra-driver-google-tpu ${PROJECT_DIR}/deployments/helm/dra-driver-google-tpu \
   --set image.repository=${REGISTRY}/${IMAGE} \
   --set image.tag=${TAG} \
@@ -31,4 +38,5 @@ ${HELM} upgrade -i --create-namespace --namespace dra-driver-google-tpu dra-driv
   --set kubeletPlugin.priorityClassName="" \
   --set kubeletPlugin.tolerations[0].key=google.com/tpu \
   --set kubeletPlugin.tolerations[0].operator=Exists \
-  --set kubeletPlugin.tolerations[0].effect=NoSchedule
+  --set kubeletPlugin.tolerations[0].effect=NoSchedule \
+  "${EXTRA_HELM_ARGS[@]}"

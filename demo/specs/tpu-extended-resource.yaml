@@ -1,0 +1,59 @@
+# Extended resource request via DRA (KEP-5004).
+#
+# One pod requesting TPUs through the classic `resources.limits` API instead
+# of a ResourceClaim. The scheduler translates the request into a DRA
+# allocation against the tpu.google.com DeviceClass.
+#
+# Requirements:
+# - The DRAExtendedResource feature gate enabled on the apiserver, scheduler,
+#   controller-manager, and kubelet (beta and on by default since Kubernetes
+#   1.37; must be enabled explicitly on 1.35/1.36). The Kind demo cluster
+#   config in demo/clusters/kind/scripts/kind-cluster-config.yaml enables it.
+# - The driver installed with an explicit mapping:
+#     EXTENDED_RESOURCE_NAME=google.com/tpu ./demo/scripts/install-dra-driver.sh
+#   Alternatively, replace the resource name below with the implicit form
+#   `deviceclass.resource.kubernetes.io/tpu.google.com`, which is always
+#   available regardless of the explicit mapping.
+#
+# WARNING: the limit below must equal the node's full TPU chip count. This
+# driver only prepares claims covering all chips on a node, but an extended
+# resource request cannot express `allocationMode: All` — the scheduler will
+# happily bind a partial allocation on a larger node, which the kubelet plugin
+# then rejects forever, leaving the pod stuck in ContainerCreating and the
+# allocated devices unusable until the pod is deleted. The Kind demo cluster
+# advertises 4 chips (cloud.google.com/gke-accelerator-count=4); adjust the
+# value to match your node's chip count.
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tpu-extended-resource
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: tpu-extended-resource
+  name: tpu-extended-resource-pod
+  labels:
+    app: pod
+spec:
+  tolerations:
+  - key: "google.com/tpu"
+    operator: "Exists"
+    effect: "NoSchedule"
+  containers:
+  - name: ctr0
+    image: busybox:latest
+    command:
+        - /bin/sh
+        - -c
+        - |
+          echo "TPU environment variables:"
+          env | grep -i tpu
+          echo "Sleeping indefinitely..."
+          sleep infinity
+    resources:
+      limits:
+        google.com/tpu: 4

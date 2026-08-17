@@ -226,6 +226,57 @@ curl http://localhost:8000/v1/chat/completions \
 
 ---
 
+## Requesting TPUs via Extended Resources (KEP-5004)
+
+Pods can request TPUs through the classic `resources.limits` API instead of a
+ResourceClaim, using the [extended resource mapping](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/#extended-resource)
+on the DeviceClass. The scheduler translates the extended resource request into
+a DRA allocation, so no workload changes are needed to migrate from a device
+plugin to this driver.
+
+This requires the `DRAExtendedResource` feature gate enabled on the
+kube-apiserver, kube-scheduler, kube-controller-manager, and kubelet. The gate
+is beta and on by default since Kubernetes 1.37; on 1.35/1.36 it must be
+enabled explicitly. The Kind demo cluster config
+(`demo/clusters/kind/scripts/kind-cluster-config.yaml`) enables it.
+
+The implicit name `deviceclass.resource.kubernetes.io/tpu.google.com` is
+always available. To also map a familiar explicit name such as
+`google.com/tpu`, install the chart with:
+
+```bash
+helm upgrade -i --create-namespace --namespace dra-driver-google-tpu \
+  dra-driver-google-tpu deployments/helm/dra-driver-google-tpu \
+  --set deviceClass.extendedResourceName=google.com/tpu
+```
+
+or pass it through the install script:
+
+```bash
+EXTENDED_RESOURCE_NAME=google.com/tpu ./demo/scripts/install-dra-driver.sh
+```
+
+> [!WARNING]
+> Do not set `google.com/tpu` on clusters where the classic TPU device plugin
+> is also advertising that name — the two mechanisms would conflict.
+
+Then deploy a pod that requests TPUs via `resources.limits`:
+
+```bash
+kubectl apply -f demo/specs/tpu-extended-resource.yaml
+```
+
+An end-to-end test of this path against a Kind cluster is available via
+`make test-e2e-extended-resource` (see `test/e2e/extended-resource.sh`).
+
+> [!WARNING]
+> This driver only supports allocating all TPU chips on a node together, and an
+> extended resource request cannot express `allocationMode: All`. The requested
+> limit must equal the node's chip count (4 in the Kind demo cluster): on a
+> node with more chips the scheduler binds a partial allocation that the
+> kubelet plugin rejects, leaving the pod stuck in `ContainerCreating` until
+> deleted.
+
 ## References
 
 For more information on the DRA Kubernetes feature and developing custom resource drivers, see the following resources:

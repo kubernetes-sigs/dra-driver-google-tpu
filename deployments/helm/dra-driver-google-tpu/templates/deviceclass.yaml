@@ -6,3 +6,6 @@ spec:
   selectors:
   - cel:
       expression: device.driver == "tpu.google.com"
+  {{- with (.Values.deviceClass).extendedResourceName }}
+  extendedResourceName: {{ . | quote }}
+  {{- end }}

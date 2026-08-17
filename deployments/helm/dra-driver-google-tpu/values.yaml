@@ -11,6 +11,18 @@ allowDefaultNamespace: false
 
 deviceClasses: ["tpu"]
 
+deviceClass:
+  # extendedResourceName maps the tpu.google.com DeviceClass to a classic
+  # extended resource name (KEP-5004), so pods can request TPUs via
+  # `resources.limits` (e.g. `google.com/tpu`) instead of a ResourceClaim.
+  # Defaults to "" (omitted) so a fresh install does not claim ownership of a
+  # name that may collide with an existing device plugin advertising it. The
+  # implicit name `deviceclass.resource.kubernetes.io/tpu.google.com` is always
+  # available, whether or not an explicit name is set here. Requires the
+  # DRAExtendedResource feature gate (beta and on by default since Kubernetes
+  # 1.37; must be enabled explicitly on 1.35/1.36).
+  extendedResourceName: ""
+
 imagePullSecrets: []
 image:
   repository: registry.k8s.io/dra-driver-google/dra-driver-google-tpu
