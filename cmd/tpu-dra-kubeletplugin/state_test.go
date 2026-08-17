@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"slices"
 	"testing"
 
 	resourceapi "k8s.io/api/resource/v1"
@@ -55,6 +56,12 @@ func claimWithResults(results ...resourceapi.DeviceRequestAllocationResult) *res
 			},
 		},
 	}
+}
+
+func claimWithResultsAndConfigs(configs []resourceapi.DeviceAllocationConfiguration, results ...resourceapi.DeviceRequestAllocationResult) *resourceapi.ResourceClaim {
+	claim := claimWithResults(results...)
+	claim.Status.Allocation.Devices.Config = configs
+	return claim
 }
 
 func result(driver, pool, device, request string) resourceapi.DeviceRequestAllocationResult {
@@ -155,6 +162,151 @@ func TestPrepareDevicesIgnoresForeignAllocationResults(t *testing.T) {
 			for _, want := range tt.wantDevices {
 				if !got[want] {
 					t.Errorf("prepareDevices() did not prepare %q; prepared %v", want, got)
+				}
+			}
+		})
+	}
+}
+
+// Opaque device configs attached to the claim or its device classes must be
+// decoded, resolved by precedence, and turned into CDI environment edits on
+// every prepared device.
+func TestPrepareDevicesAppliesOpaqueConfigs(t *testing.T) {
+	tests := []struct {
+		name    string
+		configs []resourceapi.DeviceAllocationConfiguration
+		// Allocation results for the claim; defaults to tpu0 and tpu1 both
+		// allocated to a single request named "tpus".
+		results []resourceapi.DeviceRequestAllocationResult
+		wantErr bool
+		// Environment entries every prepared device must carry.
+		wantEnvs []string
+	}{
+		{
+			name:     "no configs applies the default config with no env edits",
+			wantEnvs: nil,
+		},
+		{
+			name: "claim config sets libtpu log levels",
+			configs: []resourceapi.DeviceAllocationConfiguration{
+				opaqueConfig(resourceapi.AllocationConfigSourceClaim, DriverName, tpuConfigJSON(2)),
+			},
+			wantEnvs: []string{"TPU_MIN_LOG_LEVEL=2", "TPU_STDERR_LOG_LEVEL=2"},
+		},
+		{
+			name: "claim config overrides class config",
+			configs: []resourceapi.DeviceAllocationConfiguration{
+				opaqueConfig(resourceapi.AllocationConfigSourceClass, DriverName, tpuConfigJSON(0)),
+				opaqueConfig(resourceapi.AllocationConfigSourceClaim, DriverName, tpuConfigJSON(3)),
+			},
+			wantEnvs: []string{"TPU_MIN_LOG_LEVEL=3", "TPU_STDERR_LOG_LEVEL=3"},
+		},
+		{
+			name: "config bound to another request leaves this claim's devices alone",
+			configs: []resourceapi.DeviceAllocationConfiguration{
+				opaqueConfig(resourceapi.AllocationConfigSourceClaim, DriverName, tpuConfigJSON(1), "nics"),
+			},
+			wantEnvs: nil,
+		},
+		{
+			name: "config bound to the claim's request applies",
+			configs: []resourceapi.DeviceAllocationConfiguration{
+				opaqueConfig(resourceapi.AllocationConfigSourceClaim, DriverName, tpuConfigJSON(1), "tpus"),
+			},
+			wantEnvs: []string{"TPU_MIN_LOG_LEVEL=1", "TPU_STDERR_LOG_LEVEL=1"},
+		},
+		{
+			name: "config for another driver is ignored",
+			configs: []resourceapi.DeviceAllocationConfiguration{
+				opaqueConfig(resourceapi.AllocationConfigSourceClaim, foreignDriverName, []byte(`{"not": "a tpu config"}`)),
+			},
+			wantEnvs: nil,
+		},
+		{
+			name: "config with an out-of-range level fails prepare",
+			configs: []resourceapi.DeviceAllocationConfiguration{
+				opaqueConfig(resourceapi.AllocationConfigSourceClaim, DriverName, tpuConfigJSON(7)),
+			},
+			wantErr: true,
+		},
+		{
+			name: "config with an unknown field fails prepare",
+			configs: []resourceapi.DeviceAllocationConfiguration{
+				opaqueConfig(resourceapi.AllocationConfigSourceClaim, DriverName, []byte(`{"apiVersion": "tpu.resource.google.com/v1alpha1", "kind": "TpuConfig", "bogus": true}`)),
+			},
+			wantErr: true,
+		},
+		{
+			// The env vars a TpuConfig produces act on the whole container.
+			// Two requests in one claim with configs that disagree on a value
+			// would make the merged container environment depend on CDI
+			// device application order, so prepare must fail instead.
+			name: "configs on different requests with conflicting values fail prepare",
+			configs: []resourceapi.DeviceAllocationConfiguration{
+				opaqueConfig(resourceapi.AllocationConfigSourceClaim, DriverName, tpuConfigJSON(1), "tpus"),
+				opaqueConfig(resourceapi.AllocationConfigSourceClaim, DriverName, tpuConfigJSON(2), "moretpus"),
+			},
+			results: []resourceapi.DeviceRequestAllocationResult{
+				result(DriverName, "tpu-pool", "tpu0", "tpus"),
+				result(DriverName, "tpu-pool", "tpu1", "moretpus"),
+			},
+			wantErr: true,
+		},
+		{
+			name: "configs on different requests with agreeing values apply",
+			configs: []resourceapi.DeviceAllocationConfiguration{
+				opaqueConfig(resourceapi.AllocationConfigSourceClaim, DriverName, tpuConfigJSON(1), "tpus"),
+				opaqueConfig(resourceapi.AllocationConfigSourceClaim, DriverName, tpuConfigJSON(1), "moretpus"),
+			},
+			results: []resourceapi.DeviceRequestAllocationResult{
+				result(DriverName, "tpu-pool", "tpu0", "tpus"),
+				result(DriverName, "tpu-pool", "tpu1", "moretpus"),
+			},
+			wantEnvs: []string{"TPU_MIN_LOG_LEVEL=1", "TPU_STDERR_LOG_LEVEL=1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := tpuDeviceState(2, "tpu0", "tpu1")
+			results := tt.results
+			if results == nil {
+				results = []resourceapi.DeviceRequestAllocationResult{
+					result(DriverName, "tpu-pool", "tpu0", "tpus"),
+					result(DriverName, "tpu-pool", "tpu1", "tpus"),
+				}
+			}
+			claim := claimWithResultsAndConfigs(tt.configs, results...)
+
+			prepared, err := state.prepareDevices(claim)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("prepareDevices() = %d devices, want an error", len(prepared))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("prepareDevices() error = %v, want nil", err)
+			}
+			if len(prepared) != 2 {
+				t.Fatalf("prepareDevices() prepared %d devices, want 2", len(prepared))
+			}
+			for _, device := range prepared {
+				if device.ContainerEdits == nil || device.ContainerEdits.ContainerEdits == nil {
+					t.Fatalf("device %q has no container edits", device.DeviceName)
+				}
+				edits := device.ContainerEdits.ContainerEdits
+				if len(edits.DeviceNodes) == 0 {
+					t.Errorf("device %q lost its device-node edits", device.DeviceName)
+				}
+				if len(edits.Env) != len(tt.wantEnvs) {
+					t.Errorf("device %q env = %v, want %v", device.DeviceName, edits.Env, tt.wantEnvs)
+					continue
+				}
+				for _, want := range tt.wantEnvs {
+					if !slices.Contains(edits.Env, want) {
+						t.Errorf("device %q env = %v, missing %q", device.DeviceName, edits.Env, want)
+					}
 				}
 			}
 		})

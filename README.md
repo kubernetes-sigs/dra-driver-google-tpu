@@ -128,6 +128,42 @@ for pod in $(kubectl get pod --output=jsonpath='{.items[*].metadata.name}' -n tp
 done
 ```
 
+#### 5. (Optional) Tune the workload with an opaque device configuration
+
+The driver accepts an opaque configuration of kind `TpuConfig`
+(`tpu.resource.google.com/v1alpha1`) attached to a `ResourceClaim`,
+`ResourceClaimTemplate`, or `DeviceClass`. Configs attached to the claim take
+precedence over configs from the device class, later entries take precedence
+over earlier ones within each source, and a config's `requests` list may name a
+main request (which also covers all of its `firstAvailable` subrequests) or a
+specific `<request>/<subrequest>`. Configs for other drivers are ignored;
+malformed configs (unknown fields, wrong kind, out-of-range values) fail
+`NodePrepareResources` with a descriptive error rather than starting the pod
+with defaults.
+
+Currently supported settings:
+
+| Field                 | Effect                                                     |
+|-----------------------|------------------------------------------------------------|
+| `logging.level`       | `TPU_MIN_LOG_LEVEL` in the container (0=INFO ... 3=FATAL)  |
+| `logging.stderrLevel` | `TPU_STDERR_LOG_LEVEL` in the container (defaults to `level`) |
+
+```bash
+kubectl apply -f demo/specs/tpu-test-logging-config.yaml
+kubectl -n tpu-test logs tpu-pod0 | grep LOG_LEVEL
+```
+
+#### 6. (Optional) Run the end-to-end test
+
+`test/e2e/opaque-config-e2e.sh` exercises the opaque configuration pipeline
+against a running cluster (class/claim/request/subrequest precedence, invalid
+and conflicting configs). With `CREATE_CLUSTER=true` it builds the driver
+image, creates a kind cluster using a private kubeconfig, installs the driver,
+runs the tests, and deletes the cluster again:
+```bash
+make test-e2e-opaque-config
+```
+
 ---
 
 ### Path B: Cloud Deployment with GKE

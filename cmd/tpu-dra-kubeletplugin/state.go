@@ -19,14 +19,18 @@ package main
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 
 	resourceapi "k8s.io/api/resource/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager"
 	cdiapi "tags.cncf.io/container-device-interface/pkg/cdi"
 	cdispec "tags.cncf.io/container-device-interface/specs-go"
+
+	configapi "sigs.k8s.io/dra-driver-google-tpu/api/google.com/resource/tpu/v1alpha1"
 )
 
 type PreparedDevices []*PreparedDevice
@@ -197,23 +201,59 @@ func (s *DeviceState) prepareDevices(claim *resourceapi.ResourceClaim) (Prepared
 	if len(results) != s.tm.tpuChipCount {
 		return nil, fmt.Errorf("invalid tpu resourceClaim, claim requests partial tpu devices (%d), only requests for all tpu devices (%d) on the node are supported", len(results), s.tm.tpuChipCount)
 	}
+	// Retrieve the full set of opaque device configs attached to the claim
+	// and its device classes for this driver.
+	configs, err := GetOpaqueDeviceConfigs(
+		configapi.StrictDecoder,
+		DriverName,
+		claim.Status.Allocation.Devices.Config,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("error getting opaque device configs: %w", err)
+	}
+
+	// Add the default TPU config to the front of the config list with the
+	// lowest precedence. This guarantees there will be at least one config in
+	// the list with len(Requests) == 0 for the lookup below.
+	configs = slices.Insert(configs, 0, &OpaqueDeviceConfig{Config: configapi.DefaultTpuConfig()})
+
 	// Look through the configs and figure out which one will be applied to
 	// each device allocation result based on their order of precedence.
+	configResultsMap := make(map[runtime.Object][]*resourceapi.DeviceRequestAllocationResult)
 	for _, result := range results {
 		if _, exists := s.allocatable[result.Device]; !exists {
 			return nil, fmt.Errorf("requested TPU is not allocatable: %v", result.Device)
 		}
+		for _, c := range slices.Backward(configs) {
+			if len(c.Requests) == 0 || configMatchesRequest(c.Requests, result.Request) {
+				configResultsMap[c.Config] = append(configResultsMap[c.Config], &result)
+				break
+			}
+		}
 	}
 
-	// Normalize, validate, and apply all configs associated wi th devices that
+	// A config that decoded cleanly but matched no allocation result (for
+	// example one bound to a misspelled request name, or fully shadowed by a
+	// higher-precedence config) is silently unused. That mirrors the sibling
+	// drivers -- erroring here would be wrong, since the named request may
+	// legitimately have been satisfied by another driver -- but leave a trace
+	// for debugging. configs[0] is the injected default and is exempt.
+	for _, c := range configs[1:] {
+		if _, used := configResultsMap[c.Config]; !used {
+			klog.Warningf("TPU config for requests %v in claim %v matched no allocated TPU device and will be ignored", c.Requests, claim.UID)
+		}
+	}
+
+	// Normalize, validate, and apply all configs associated with devices that
 	// need to be prepared. Track container edits generated from applying the
 	// config to the set of device allocation results.
-	perDeviceCDIContainerEdits, err := s.getDeviceContainerEdits(results)
+	perDeviceCDIContainerEdits, err := s.getDeviceContainerEdits(configResultsMap)
 	if err != nil {
-		klog.Error(err)
+		return nil, fmt.Errorf("error building container edits: %w", err)
 	}
-	// Walk through each config and its associated device allocation results
-	// and construct the list of prepared devices to return.
+
+	// Walk through each device allocation result and construct the list of
+	// prepared devices to return.
 	var preparedDevices PreparedDevices
 	for _, result := range results {
 		device := &PreparedDevice{
@@ -243,16 +283,32 @@ func (s *DeviceState) unprepareDevices(claimUID string) error {
 	return nil
 }
 
-func (s *DeviceState) getDeviceContainerEdits(results []resourceapi.DeviceRequestAllocationResult) (PerDeviceCDIContainerEdits, error) {
+func (s *DeviceState) getDeviceContainerEdits(configResultsMap map[runtime.Object][]*resourceapi.DeviceRequestAllocationResult) (PerDeviceCDIContainerEdits, error) {
 	perDeviceEdits := make(PerDeviceCDIContainerEdits)
 
-	for _, result := range results {
-		deviceNodes := s.tm.DeviceNodeContainerEdits(result.Device)
-		edits := &cdispec.ContainerEdits{
-			DeviceNodes: deviceNodes,
+	claimEnv := make(map[string]string)
+	for config, results := range configResultsMap {
+		tpuConfig, ok := config.(*configapi.TpuConfig)
+		if !ok {
+			return nil, fmt.Errorf("runtime object is not a recognized configuration: %T", config)
 		}
 
-		perDeviceEdits[result.Device] = &cdiapi.ContainerEdits{ContainerEdits: edits}
+		envs, err := applyTpuConfig(tpuConfig)
+		if err != nil {
+			return nil, fmt.Errorf("error applying TPU config: %w", err)
+		}
+
+		if err := mergeClaimEnv(claimEnv, envs); err != nil {
+			return nil, err
+		}
+
+		for _, result := range results {
+			edits := &cdispec.ContainerEdits{
+				DeviceNodes: s.tm.DeviceNodeContainerEdits(result.Device),
+				Env:         envs,
+			}
+			perDeviceEdits[result.Device] = &cdiapi.ContainerEdits{ContainerEdits: edits}
+		}
 	}
 
 	return perDeviceEdits, nil

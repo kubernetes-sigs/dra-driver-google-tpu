@@ -65,6 +65,11 @@ COVERAGE_FILE := coverage.out
 test: build cmds
 	go test -v -coverprofile=$(COVERAGE_FILE) $(MODULE)/...
 
+# Build the driver image, create a throwaway kind cluster, and run the opaque
+# device configuration end-to-end test against it.
+test-e2e-opaque-config:
+	CREATE_CLUSTER=true test/e2e/opaque-config-e2e.sh
+
 coverage: test
 	cat $(COVERAGE_FILE) | grep -v "_mock.go" > $(COVERAGE_FILE).no-mocks
 	go tool cover -func=$(COVERAGE_FILE).no-mocks
