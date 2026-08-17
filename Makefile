@@ -65,6 +65,11 @@ COVERAGE_FILE := coverage.out
 test: build cmds
 	go test -v -coverprofile=$(COVERAGE_FILE) $(MODULE)/...
 
+# Kind-based end-to-end test of the ResourceSlice node-restriction policy in
+# the helm chart. Needs kind, kubectl, helm and docker/podman.
+test-e2e-vap:
+	HELM="$(HELM)" test/e2e/vap-node-restriction.sh
+
 coverage: test
 	cat $(COVERAGE_FILE) | grep -v "_mock.go" > $(COVERAGE_FILE).no-mocks
 	go tool cover -func=$(COVERAGE_FILE).no-mocks
