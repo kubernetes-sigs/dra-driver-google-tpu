@@ -65,6 +65,11 @@ COVERAGE_FILE := coverage.out
 test: build cmds
 	go test -v -coverprofile=$(COVERAGE_FILE) $(MODULE)/...
 
+# End-to-end test of seamless (rolling) kubelet plugin upgrades on a kind
+# cluster with fake TPU devices. Requires docker, kind, helm, kubectl, yq, jq.
+test-e2e-seamless-upgrade:
+	HELM="$(HELM)" test/e2e/seamless-upgrade.sh
+
 coverage: test
 	cat $(COVERAGE_FILE) | grep -v "_mock.go" > $(COVERAGE_FILE).no-mocks
 	go tool cover -func=$(COVERAGE_FILE).no-mocks

@@ -49,6 +49,11 @@ kubeletPlugin:
   priorityClassName: "system-node-critical"
   updateStrategy:
     type: RollingUpdate
+    # for seamless rolling updates, maxSurge can be greater than 0.
+    # See: https://pkg.go.dev/k8s.io/dynamic-resource-allocation/kubeletplugin#RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   podAnnotations: {}
   podSecurityContext: {}
   nodeSelector: {}
@@ -74,3 +79,9 @@ kubeletPlugin:
       securityContext:
         privileged: true
       resources: {}
+      # Readiness gates the rolling update: a new pod only counts as
+      # available (and the old pod is only removed) once the kubelet has
+      # registered the new plugin instance. Set to null/{} to disable.
+      readinessProbe:
+        periodSeconds: 5
+        failureThreshold: 3

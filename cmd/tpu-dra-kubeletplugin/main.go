@@ -49,9 +49,11 @@ type Flags struct {
 	nodeName      string
 	cdiRoot       string
 	deviceClasses sets.Set[string]
+	podUID        string
 
 	kubeletRegistrarDirectoryPath string
 	kubeletPluginsDirectoryPath   string
+	healthSocketPath              string
 }
 
 type Config struct {
@@ -74,14 +76,20 @@ func main() {
 }
 
 func newApp() *cli.App {
+	app, _ := newAppWithFlags()
+	return app
+}
+
+// newAppWithFlags also returns the Flags the app parses into, so tests can
+// assert on the destination bindings the rest of the driver reads from.
+func newAppWithFlags() (*cli.App, *Flags) {
 	flags := &Flags{
 		loggingConfig: flags.NewLoggingConfig(),
 	}
 	cliFlags := []cli.Flag{
 		&cli.StringFlag{
 			Name:        "node-name",
-			Usage:       "The name of the node to be worked on.",
-			Required:    true,
+			Usage:       "The name of the node to be worked on. Required to run the plugin.",
 			Destination: &flags.nodeName,
 			EnvVars:     []string{"NODE_NAME"},
 		},
@@ -97,6 +105,19 @@ func newApp() *cli.App {
 			Usage:   "The supported set of DRA device classes",
 			Value:   cli.NewStringSlice("tpu"),
 			EnvVars: []string{"DEVICE_CLASSES"},
+		},
+		&cli.StringFlag{
+			Name:        "pod-uid",
+			Usage:       "UID of the pod (used for seamless upgrades to create unique socket names).",
+			Destination: &flags.podUID,
+			EnvVars:     []string{"POD_UID"},
+		},
+		&cli.StringFlag{
+			Name:        "health-socket",
+			Usage:       "Path of the container-local Unix socket on which the plugin serves readiness probes (see the healthcheck subcommand).",
+			Value:       defaultHealthSocketPath,
+			Destination: &flags.healthSocketPath,
+			EnvVars:     []string{"HEALTH_SOCKET"},
 		},
 		&cli.StringFlag{
 			Name:        "kubelet-registrar-directory-path",
@@ -122,14 +143,23 @@ func newApp() *cli.App {
 		ArgsUsage:       " ",
 		HideHelpCommand: true,
 		Flags:           cliFlags,
+		Commands: []*cli.Command{
+			healthcheckCommand(flags),
+		},
 		Before: func(c *cli.Context) error {
-			if c.Args().Len() > 0 {
+			// The only positional argument accepted is a subcommand name.
+			if c.Args().Len() > 0 && c.App.Command(c.Args().First()) == nil {
 				return fmt.Errorf("arguments not supported: %v", c.Args().Slice())
 			}
 			return flags.loggingConfig.Apply()
 		},
 		Action: func(c *cli.Context) error {
 			ctx := c.Context
+			// Not a cli "Required" flag so that the healthcheck subcommand
+			// (the readiness probe) does not need it.
+			if flags.nodeName == "" {
+				return fmt.Errorf("Required flag \"node-name\" not set")
+			}
 			flags.deviceClasses = sets.New[string](c.StringSlice("device-classes")...)
 			clientSets, err := flags.kubeClientConfig.NewClientSets()
 			if err != nil {
@@ -145,7 +175,7 @@ func newApp() *cli.App {
 		},
 	}
 
-	return app
+	return app, flags
 }
 
 func StartPlugin(ctx context.Context, config *Config) error {

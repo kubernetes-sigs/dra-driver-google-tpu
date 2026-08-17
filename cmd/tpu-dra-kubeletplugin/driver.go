@@ -43,7 +43,10 @@ type driver struct {
 	// health fans device health reports out to WatchHealthStatus
 	// subscriptions (see device_health_status.go).
 	health *healthBroadcaster
-	config *Config
+	// readiness answers the container's readiness probe once the kubelet
+	// has confirmed this instance's registration (see health.go).
+	readiness *healthServer
+	config    *Config
 }
 
 func NewDriver(ctx context.Context,
@@ -111,6 +114,12 @@ func NewDriver(ctx context.Context,
 		kubeletplugin.Serialize(true),
 		kubeletplugin.RegistrarDirectoryPath(config.flags.kubeletRegistrarDirectoryPath),
 		kubeletplugin.PluginDataDirectoryPath(config.DriverPluginPath()),
+		// Suffix the registration and DRA sockets with the pod UID so that
+		// during a rolling update with maxSurge the outgoing and incoming
+		// pods can both be registered with the kubelet, leaving no window
+		// without a driver on the node. An empty UID keeps the fixed socket
+		// names. Requires kubelet >= 1.33.
+		kubeletplugin.RollingUpdate(types.UID(config.flags.podUID)),
 		// KEP-4680: report the health of allocated TPUs to the kubelet so it
 		// surfaces in pod.status.containerStatuses[].allocatedResourcesStatus.
 		kubeletplugin.HealthService(true),
@@ -119,6 +128,13 @@ func NewDriver(ctx context.Context,
 		return nil, err
 	}
 	driver.pluginHelper = helper
+
+	// Serve readiness only after the helper exists: readiness is derived
+	// from the registration status the kubelet reports to the helper.
+	driver.readiness = newHealthServer(config.flags.healthSocketPath, helper.RegistrationStatus)
+	if err = driver.readiness.Start(); err != nil {
+		return nil, fmt.Errorf("start readiness server: %w", err)
+	}
 
 	if err = driver.GatherStateAndPublish(ctx); err != nil {
 		return nil, err
@@ -188,7 +204,12 @@ func (d *driver) Shutdown(ctx context.Context) error {
 	if d.healthchecker != nil {
 		d.healthchecker.Stop()
 	}
-	d.pluginHelper.Stop()
+	if d.readiness != nil {
+		d.readiness.Stop()
+	}
+	if d.pluginHelper != nil {
+		d.pluginHelper.Stop()
+	}
 	return nil
 }
 

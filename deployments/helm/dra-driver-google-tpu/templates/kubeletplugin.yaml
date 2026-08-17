@@ -55,6 +55,17 @@ spec:
         command: ["tpu-dra-kubeletplugin"]
         resources:
           {{- toYaml .Values.kubeletPlugin.containers.plugin.resources | nindent 10 }}
+        {{- with .Values.kubeletPlugin.containers.plugin.readinessProbe }}
+        # Ready only once the kubelet has confirmed this instance's plugin
+        # registration. During a rolling update the DaemonSet controller
+        # therefore keeps the outgoing pod until the incoming one can actually
+        # serve DRA calls, so an image that fails to register cannot take the
+        # working driver down.
+        readinessProbe:
+          exec:
+            command: ["tpu-dra-kubeletplugin", "healthcheck"]
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         env:
         - name: CDI_ROOT
           value: /var/run/cdi
@@ -78,6 +89,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: status.hostIP
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
         - name: DEVICE_CLASSES
           value: {{ .Values.deviceClasses | join "," }}
         volumeMounts:
