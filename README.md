@@ -226,6 +226,54 @@ curl http://localhost:8000/v1/chat/completions \
 
 ---
 
+## Node Allocatable Resource Overhead (KEP-5517)
+
+The driver can publish the node memory and CPU overhead incurred when pods use
+TPUs ([KEP-5517](https://github.com/kubernetes/enhancements/issues/5517)). The
+scheduler then debits this overhead against the node's allocatable resources
+when placing pods with TPU claims, and the kubelet adds it to the pod- and
+container-level cgroup limits, so host-side memory used on behalf of TPU
+workloads no longer causes overcommit.
+
+### Prerequisites
+
+* Kubernetes v1.37 or newer, with the alpha `DRANodeAllocatableResources`
+  feature gate enabled on the API server, scheduler, controller manager, and
+  kubelet.
+* The driver's `NodeAllocatableResources` feature gate enabled.
+
+### Configuration
+
+Overhead values are admin-supplied resource quantities, set via helm:
+
+```bash
+helm upgrade -i ... \
+  --set featureGates.NodeAllocatableResources=true \
+  --set nodeAllocatableOverhead.memory.perPod=256Mi \
+  --set nodeAllocatableOverhead.memory.perContainer=64Mi \
+  --set nodeAllocatableOverhead.cpu.perPod=500m
+```
+
+Each value is optional; empty or zero values are omitted from the published
+ResourceSlices. `perPod` is charged once per pod referencing a claim, and
+`perContainer` once per container reference. Overhead is accounted per
+allocated device, so a claim for all chips of an N-chip node debits N times
+the configured values. Setting any overhead value while the driver's
+`NodeAllocatableResources` feature gate is disabled is a startup error.
+
+### Demo
+
+With the driver installed as above, deploy the demo workload and observe the
+accounted overhead:
+
+```bash
+kubectl apply -f demo/specs/node-allocatable-overhead.yaml
+kubectl get pod -n tpu-test tpu-overhead-pod -o jsonpath='{.status.nodeAllocatableResourceClaimStatuses}'
+```
+
+An automated end-to-end test of this feature runs in CI; see
+`test/e2e/node-allocatable-overhead.sh`.
+
 ## References
 
 For more information on the DRA Kubernetes feature and developing custom resource drivers, see the following resources:

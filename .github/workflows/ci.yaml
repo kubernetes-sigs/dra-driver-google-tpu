@@ -19,3 +19,6 @@ jobs:
 
   helm:
     uses: ./.github/workflows/helm.yaml
+
+  e2e:
+    uses: ./.github/workflows/e2e.yaml

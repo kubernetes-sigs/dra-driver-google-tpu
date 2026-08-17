@@ -80,6 +80,32 @@ spec:
               fieldPath: status.hostIP
         - name: DEVICE_CLASSES
           value: {{ .Values.deviceClasses | join "," }}
+        {{- with (((.Values.nodeAllocatableOverhead).memory).perPod) }}
+        - name: NODE_ALLOCATABLE_MEMORY_OVERHEAD_PER_POD
+          value: "{{ . }}"
+        {{- end }}
+        {{- with (((.Values.nodeAllocatableOverhead).memory).perContainer) }}
+        - name: NODE_ALLOCATABLE_MEMORY_OVERHEAD_PER_CONTAINER
+          value: "{{ . }}"
+        {{- end }}
+        {{- with (((.Values.nodeAllocatableOverhead).cpu).perPod) }}
+        - name: NODE_ALLOCATABLE_CPU_OVERHEAD_PER_POD
+          value: "{{ . }}"
+        {{- end }}
+        {{- with (((.Values.nodeAllocatableOverhead).cpu).perContainer) }}
+        - name: NODE_ALLOCATABLE_CPU_OVERHEAD_PER_CONTAINER
+          value: "{{ . }}"
+        {{- end }}
+        {{- $gates := list }}
+        {{- range $key, $value := .Values.featureGates }}
+        {{- if not (kindIs "invalid" $value) }}
+        {{- $gates = append $gates (printf "%s=%v" $key $value) }}
+        {{- end }}
+        {{- end }}
+        {{- if $gates }}
+        - name: FEATURE_GATES
+          value: "{{ join "," $gates }}"
+        {{- end }}
         volumeMounts:
         - name: plugins-registry
           mountPath: {{ .Values.kubeletPlugin.kubeletRegistrarDirectoryPath | quote }}

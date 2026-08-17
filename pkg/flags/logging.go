@@ -22,21 +22,22 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/urfave/cli/v2"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/component-base/featuregate"
 	logsapi "k8s.io/component-base/logs/api/v1"
 	_ "k8s.io/component-base/logs/json/register" // for JSON log output support
+
+	"sigs.k8s.io/dra-driver-google-tpu/pkg/featuregates"
 )
 
 type LoggingConfig struct {
-	featureGate featuregate.MutableVersionedFeatureGate
+	featureGate featuregates.FeatureGate
 	config      *logsapi.LoggingConfiguration
 }
 
 func NewLoggingConfig() *LoggingConfig {
-	fg := featuregate.NewFeatureGate()
-	var _ pflag.Value = fg // compile-time check for the type conversion below
+	// The logging feature gates share the driver-wide registry, so the single
+	// --feature-gates flag (and FEATURE_GATES env var) covers both.
 	l := &LoggingConfig{
-		featureGate: fg,
+		featureGate: featuregates.FeatureGates(),
 		config:      logsapi.NewLoggingConfiguration(),
 	}
 	utilruntime.Must(logsapi.AddFeatureGates(l.featureGate))
@@ -63,7 +64,7 @@ func (l *LoggingConfig) Flags() []cli.Flag {
 		Name: "feature-gates",
 		Usage: "A set of key=value pairs that describe feature gates for alpha/experimental features. " +
 			"Options are:\n     " + strings.Join(l.featureGate.KnownFeatures(), "\n     "),
-		Value: l.featureGate.(pflag.Value), //nolint:forcetypeassert // No need for type check: l.featureGate is a *featuregate.featureGate, which implements pflag.Value.
+		Value: l.featureGate,
 	})
 
 	var flags []cli.Flag

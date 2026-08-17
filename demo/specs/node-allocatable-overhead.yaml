@@ -1,0 +1,72 @@
+# Demo for KEP-5517 node-allocatable resource overhead.
+#
+# Prerequisites:
+#   - Kubernetes v1.37+ with the DRANodeAllocatableResources feature gate
+#     enabled on the API server, scheduler, controller manager, and kubelet.
+#   - The driver installed with the NodeAllocatableResources feature gate and
+#     overhead values, e.g.:
+#       --set featureGates.NodeAllocatableResources=true \
+#       --set nodeAllocatableOverhead.memory.perPod=256Mi \
+#       --set nodeAllocatableOverhead.memory.perContainer=64Mi \
+#       --set nodeAllocatableOverhead.cpu.perPod=500m
+#
+# What to observe once the pod is running (overhead is accounted per allocated
+# device, so a claim for N chips debits N times the configured values):
+#   - The published devices carry the overhead:
+#       kubectl get resourceslice -o jsonpath='{.items[*].spec.devices[*].nodeAllocatableResources}'
+#   - The scheduler records the accounted overhead on the pod:
+#       kubectl get pod -n tpu-test tpu-overhead-pod -o jsonpath='{.status.nodeAllocatableResourceClaimStatuses}'
+#   - The pod-level cgroup memory limit is the container limit plus the
+#     accounted overhead (perPod + perContainer per allocated device).
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tpu-test
+
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  namespace: tpu-test
+  name: all-tpus-overhead
+spec:
+  spec:
+    devices:
+      requests:
+      - name: tpus
+        exactly:
+          deviceClassName: tpu.google.com
+          allocationMode: All
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: tpu-test
+  name: tpu-overhead-pod
+spec:
+  tolerations:
+  - key: "google.com/tpu"
+    operator: "Exists"
+    effect: "NoSchedule"
+  containers:
+  - name: ctr0
+    image: busybox:latest
+    command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Memory limit visible to the container (spec limit only, overhead is applied at the cgroup level):"
+          cat /sys/fs/cgroup/memory.max 2>/dev/null || true
+          echo "Sleeping indefinitely..."
+          sleep infinity
+    resources:
+      limits:
+        memory: 128Mi
+      claims:
+      - name: tpu
+  resourceClaims:
+  - name: tpu
+    resourceClaimTemplateName: all-tpus-overhead

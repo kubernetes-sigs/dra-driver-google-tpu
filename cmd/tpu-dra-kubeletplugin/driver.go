@@ -141,7 +141,9 @@ func (d *driver) GatherStateAndPublish(ctx context.Context) error {
 		for _, device := range d.deviceState.allocatable {
 			if device.allocatable {
 				klog.Info("Appending Device", device)
-				resourceSlice.Devices = append(resourceSlice.Devices, device.GetDevice())
+				dev := device.GetDevice()
+				applyNodeAllocatableOverheads(&dev, d.config)
+				resourceSlice.Devices = append(resourceSlice.Devices, dev)
 			}
 		}
 	}()

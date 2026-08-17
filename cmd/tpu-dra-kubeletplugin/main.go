@@ -27,6 +27,8 @@ import (
 	"syscall"
 
 	"github.com/urfave/cli/v2"
+	corev1 "k8s.io/api/core/v1"
+	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	coreclientset "k8s.io/client-go/kubernetes"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
@@ -52,11 +54,22 @@ type Flags struct {
 
 	kubeletRegistrarDirectoryPath string
 	kubeletPluginsDirectoryPath   string
+
+	nodeAllocatableMemoryOverheadPerPod       string
+	nodeAllocatableMemoryOverheadPerContainer string
+	nodeAllocatableCPUOverheadPerPod          string
+	nodeAllocatableCPUOverheadPerContainer    string
 }
 
 type Config struct {
 	flags      *Flags
 	coreclient coreclientset.Interface
+
+	// nodeAllocatableResources is the KEP-5517 overhead published on every
+	// device, parsed once from the overhead flags at startup. Nil when
+	// nothing is configured or the NodeAllocatableResources gate is off.
+	// Immutable after startup.
+	nodeAllocatableResources map[corev1.ResourceName]resourceapi.NodeAllocatableResource
 }
 
 func (c Config) DriverPluginPath() string {
@@ -112,6 +125,30 @@ func newApp() *cli.App {
 			Destination: &flags.kubeletPluginsDirectoryPath,
 			EnvVars:     []string{"KUBELET_PLUGINS_DIRECTORY_PATH"},
 		},
+		&cli.StringFlag{
+			Name:        "node-allocatable-memory-overhead-per-pod",
+			Usage:       "Node-allocatable memory overhead per pod referencing a TPU (resource quantity, e.g. '100Mi'). Requires the NodeAllocatableResources feature gate.",
+			Destination: &flags.nodeAllocatableMemoryOverheadPerPod,
+			EnvVars:     []string{"NODE_ALLOCATABLE_MEMORY_OVERHEAD_PER_POD"},
+		},
+		&cli.StringFlag{
+			Name:        "node-allocatable-memory-overhead-per-container",
+			Usage:       "Node-allocatable memory overhead per container referencing a TPU (resource quantity, e.g. '10Mi'). Requires the NodeAllocatableResources feature gate.",
+			Destination: &flags.nodeAllocatableMemoryOverheadPerContainer,
+			EnvVars:     []string{"NODE_ALLOCATABLE_MEMORY_OVERHEAD_PER_CONTAINER"},
+		},
+		&cli.StringFlag{
+			Name:        "node-allocatable-cpu-overhead-per-pod",
+			Usage:       "Node-allocatable CPU overhead per pod referencing a TPU (resource quantity, e.g. '100m'). Requires the NodeAllocatableResources feature gate.",
+			Destination: &flags.nodeAllocatableCPUOverheadPerPod,
+			EnvVars:     []string{"NODE_ALLOCATABLE_CPU_OVERHEAD_PER_POD"},
+		},
+		&cli.StringFlag{
+			Name:        "node-allocatable-cpu-overhead-per-container",
+			Usage:       "Node-allocatable CPU overhead per container referencing a TPU (resource quantity, e.g. '10m'). Requires the NodeAllocatableResources feature gate.",
+			Destination: &flags.nodeAllocatableCPUOverheadPerContainer,
+			EnvVars:     []string{"NODE_ALLOCATABLE_CPU_OVERHEAD_PER_CONTAINER"},
+		},
 	}
 	cliFlags = append(cliFlags, flags.kubeClientConfig.Flags()...)
 	cliFlags = append(cliFlags, flags.loggingConfig.Flags()...)
@@ -131,14 +168,19 @@ func newApp() *cli.App {
 		Action: func(c *cli.Context) error {
 			ctx := c.Context
 			flags.deviceClasses = sets.New[string](c.StringSlice("device-classes")...)
+			nodeAllocatableResources, err := nodeAllocatableOverheadsFromFlags(flags)
+			if err != nil {
+				return err
+			}
 			clientSets, err := flags.kubeClientConfig.NewClientSets()
 			if err != nil {
 				return fmt.Errorf("create client: %v", err)
 			}
 
 			config := &Config{
-				flags:      flags,
-				coreclient: clientSets.Core,
+				flags:                    flags,
+				coreclient:               clientSets.Core,
+				nodeAllocatableResources: nodeAllocatableResources,
 			}
 
 			return StartPlugin(ctx, config)

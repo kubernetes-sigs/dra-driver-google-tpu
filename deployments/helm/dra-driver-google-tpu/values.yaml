@@ -11,6 +11,24 @@ allowDefaultNamespace: false
 
 deviceClasses: ["tpu"]
 
+# Node-allocatable overhead published on TPU devices. Each value is an
+# optional Kubernetes resource quantity (e.g. "100Mi", "250m") describing the
+# node memory/CPU overhead consumed per pod or per container using a TPU.
+# Empty or zero values are omitted from the published ResourceSlices.
+# Setting any value requires featureGates.NodeAllocatableResources=true;
+# the plugin refuses to start otherwise.
+nodeAllocatableOverhead:
+  memory:
+    perPod: ""
+    perContainer: ""
+  cpu:
+    perPod: ""
+    perContainer: ""
+
+# Feature gates for alpha/experimental features of this driver, e.g.:
+#   NodeAllocatableResources: false    # Publish node-allocatable overhead for TPU devices (see nodeAllocatableOverhead)
+featureGates: {}
+
 imagePullSecrets: []
 image:
   repository: registry.k8s.io/dra-driver-google/dra-driver-google-tpu

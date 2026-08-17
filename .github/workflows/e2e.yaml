@@ -1,0 +1,27 @@
+name: e2e
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  node-allocatable-overhead:
+    name: Node Allocatable Overhead (kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install kind
+        # Latest build rather than a pinned release: stable kind releases do
+        # not yet generate kubeadm v1beta4 configs for Kubernetes v1.37 node
+        # images. Pin to the first stable release that does.
+        run: |
+          curl -sLo kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+          sudo install kind /usr/local/bin/kind
+
+      - name: Run e2e
+        run: ./test/e2e/node-allocatable-overhead.sh
