@@ -49,6 +49,7 @@ type Flags struct {
 	nodeName      string
 	cdiRoot       string
 	deviceClasses sets.Set[string]
+	deviceStatus  bool
 
 	kubeletRegistrarDirectoryPath string
 	kubeletPluginsDirectoryPath   string
@@ -91,6 +92,12 @@ func newApp() *cli.App {
 			Value:       "/etc/cdi",
 			Destination: &flags.cdiRoot,
 			EnvVars:     []string{"CDI_ROOT"},
+		},
+		&cli.BoolFlag{
+			Name:        "device-status",
+			Usage:       "Publish the identity of allocated TPUs (uuid, tpuGen, index) to ResourceClaim.status.devices during prepare (KEP-4817). Requires the resourceclaims/status RBAC from the Helm chart.",
+			Destination: &flags.deviceStatus,
+			EnvVars:     []string{"DEVICE_STATUS"},
 		},
 		&cli.StringSliceFlag{
 			Name:    "device-classes",

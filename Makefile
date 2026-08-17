@@ -65,6 +65,12 @@ COVERAGE_FILE := coverage.out
 test: build cmds
 	go test -v -coverprofile=$(COVERAGE_FILE) $(MODULE)/...
 
+# End-to-end test for KEP-4817 device status publishing on a kind cluster.
+# Requires docker, kind, helm, kubectl and jq.
+.PHONY: test-e2e-device-status
+test-e2e-device-status:
+	HELM="$(HELM)" test/e2e/device-status.sh
+
 coverage: test
 	cat $(COVERAGE_FILE) | grep -v "_mock.go" > $(COVERAGE_FILE).no-mocks
 	go tool cover -func=$(COVERAGE_FILE).no-mocks

@@ -11,6 +11,11 @@ allowDefaultNamespace: false
 
 deviceClasses: ["tpu"]
 
+# Publish the identity of allocated TPUs (uuid, tpuGen, index) to
+# ResourceClaim.status.devices during prepare (KEP-4817). Enabling this also
+# grants the plugin the RBAC needed to update ResourceClaim status.
+deviceStatus: false
+
 imagePullSecrets: []
 image:
   repository: registry.k8s.io/dra-driver-google/dra-driver-google-tpu

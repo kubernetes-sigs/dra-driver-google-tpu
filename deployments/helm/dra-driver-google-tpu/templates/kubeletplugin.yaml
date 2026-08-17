@@ -80,6 +80,8 @@ spec:
               fieldPath: status.hostIP
         - name: DEVICE_CLASSES
           value: {{ .Values.deviceClasses | join "," }}
+        - name: DEVICE_STATUS
+          value: {{ eq (.Values.deviceStatus | toString) "true" | quote }}
         volumeMounts:
         - name: plugins-registry
           mountPath: {{ .Values.kubeletPlugin.kubeletRegistrarDirectoryPath | quote }}

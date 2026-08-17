@@ -22,6 +22,7 @@ import (
 	"sync"
 
 	resourceapi "k8s.io/api/resource/v1"
+	draclient "k8s.io/dynamic-resource-allocation/client"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager"
@@ -53,6 +54,45 @@ type DeviceState struct {
 	checkpointManager checkpointmanager.CheckpointManager
 	tm                *tpuManager
 	publishchan       chan interface{}
+	// deviceStatusEnabled gates publishing AllocatedDeviceStatus to
+	// ResourceClaim.status.devices during prepare (KEP-4817). Off by default;
+	// enabling it requires the extra RBAC in the Helm chart.
+	deviceStatusEnabled bool
+	// draclient is the version-converting DRA client used for the status
+	// write; built once so the negotiated API version is cached.
+	draclient *draclient.Client
+	// statusPublished remembers claims whose device status was written, so
+	// repeated Prepare calls for the same claim skip the API round-trip. Has
+	// its own lock: it is touched outside the DeviceState lock.
+	statusPublished claimSet
+}
+
+// claimSet is a concurrency-safe set of claim UIDs.
+type claimSet struct {
+	mu   sync.Mutex
+	uids map[string]struct{}
+}
+
+func (c *claimSet) Load(uid string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.uids[uid]
+	return ok
+}
+
+func (c *claimSet) Store(uid string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.uids == nil {
+		c.uids = make(map[string]struct{})
+	}
+	c.uids[uid] = struct{}{}
+}
+
+func (c *claimSet) Delete(uid string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.uids, uid)
 }
 
 func NewDeviceState(config *Config, nodeLabels map[string]string, devDir string, publishChan chan interface{}) (*DeviceState, error) {
@@ -83,11 +123,13 @@ func NewDeviceState(config *Config, nodeLabels map[string]string, devDir string,
 	}
 
 	state := &DeviceState{
-		cdi:               cdi,
-		allocatable:       allocatable,
-		checkpointManager: checkpointManager,
-		tm:                tm,
-		publishchan:       publishChan,
+		cdi:                 cdi,
+		allocatable:         allocatable,
+		checkpointManager:   checkpointManager,
+		tm:                  tm,
+		publishchan:         publishChan,
+		deviceStatusEnabled: config.flags.deviceStatus,
+		draclient:           newDRAClient(config),
 	}
 
 	checkpoints, err := state.checkpointManager.ListCheckpoints()
@@ -110,6 +152,23 @@ func NewDeviceState(config *Config, nodeLabels map[string]string, devDir string,
 }
 
 func (s *DeviceState) Prepare(ctx context.Context, claim *resourceapi.ResourceClaim) ([]kubeletplugin.Device, error) {
+	devices, statuses, err := s.prepare(claim)
+	if err != nil {
+		return nil, err
+	}
+
+	// KEP-4817: record the identity of the allocated TPUs on the claim. This
+	// blocks on the API server, so it runs after the lock is released: the
+	// lock is shared with the health checker and the slice publisher.
+	s.publishDeviceStatus(ctx, claim, statuses)
+
+	return devices, nil
+}
+
+// prepare does the node-local part of Prepare under the DeviceState lock and,
+// when device status publishing is enabled, also returns the statuses to
+// publish for the claim.
+func (s *DeviceState) prepare(claim *resourceapi.ResourceClaim) ([]kubeletplugin.Device, []resourceapi.AllocatedDeviceStatus, error) {
 	s.Lock()
 	defer s.Unlock()
 
@@ -117,30 +176,42 @@ func (s *DeviceState) Prepare(ctx context.Context, claim *resourceapi.ResourceCl
 
 	checkpoint := newCheckpoint()
 	if err := s.checkpointManager.GetCheckpoint(DriverPluginCheckpointFile, checkpoint); err != nil {
-		return nil, fmt.Errorf("unable to sync from checkpoint: %v", err)
+		return nil, nil, fmt.Errorf("unable to sync from checkpoint: %v", err)
 	}
 
 	preparedClaims := checkpoint.V1.PreparedClaims
 	if preparedClaims[claimUID] != nil {
 		klog.Infof("skip prepare: claim %v already exists in checkpoint", claimUID)
-		return preparedClaims[claimUID].GetDevices(), nil
+		// Still hand back the statuses: publishing is best-effort, and a
+		// repeated Prepare (kubelet/plugin restart, another pod using the
+		// claim) is the only chance to retry a write that failed earlier.
+		return preparedClaims[claimUID].GetDevices(), s.deviceStatusesFor(claim), nil
 	}
 
 	preparedDevices, err := s.prepareDevices(claim)
 	if err != nil {
-		return nil, fmt.Errorf("prepare failed for claim %v: %v", claimUID, err)
+		return nil, nil, fmt.Errorf("prepare failed for claim %v: %v", claimUID, err)
 	}
 
 	if err = s.cdi.CreateClaimSpecFile(claimUID, preparedDevices); err != nil {
-		return nil, fmt.Errorf("unable to create CDI spec file for claim: %v", err)
+		return nil, nil, fmt.Errorf("unable to create CDI spec file for claim: %v", err)
 	}
 
 	preparedClaims[claimUID] = preparedDevices
 	if err := s.checkpointManager.CreateCheckpoint(DriverPluginCheckpointFile, checkpoint); err != nil {
-		return nil, fmt.Errorf("unable to sync to checkpoint: %v", err)
+		return nil, nil, fmt.Errorf("unable to sync to checkpoint: %v", err)
 	}
 
-	return preparedClaims[claimUID].GetDevices(), nil
+	return preparedClaims[claimUID].GetDevices(), s.deviceStatusesFor(claim), nil
+}
+
+// deviceStatusesFor returns the device statuses to publish for the claim, or
+// nil when publishing is disabled. Must be called with the lock held.
+func (s *DeviceState) deviceStatusesFor(claim *resourceapi.ResourceClaim) []resourceapi.AllocatedDeviceStatus {
+	if !s.deviceStatusEnabled {
+		return nil
+	}
+	return s.buildDeviceStatuses(claim)
 }
 
 func (s *DeviceState) Unprepare(ctx context.Context, claimUID string) error {
@@ -169,6 +240,7 @@ func (s *DeviceState) Unprepare(ctx context.Context, claimUID string) error {
 
 	// unprepare succeeded, update the node local checkpoint claim data
 	delete(preparedClaims, claimUID)
+	s.statusPublished.Delete(claimUID)
 	if err := s.checkpointManager.CreateCheckpoint(DriverPluginCheckpointFile, checkpoint); err != nil {
 		return fmt.Errorf("unable to sync to checkpoint: %v", err)
 	}

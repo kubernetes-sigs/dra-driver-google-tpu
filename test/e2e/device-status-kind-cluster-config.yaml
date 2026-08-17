@@ -1,0 +1,19 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+featureGates:
+  # KEP-4817: lets drivers write ResourceClaim.status.devices (beta, on by
+  # default since 1.33; set explicitly so the test does not depend on that).
+  DRAResourceClaimDeviceStatus: true
+  # 1.36+: node-local drivers additionally need the "associated-node" verbs
+  # on resourceclaims/driver; enabled so the chart's granular RBAC rule is
+  # exercised for real rather than being inert.
+  DRAResourceClaimGranularStatusAuthorization: true
+nodes:
+- role: control-plane
+- role: worker
+  kubeadmConfigPatches:
+  - |
+    kind: JoinConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "cloud.google.com/gke-tpu-accelerator=tpu-v4-podslice,cloud.google.com/gke-tpu-topology=2x2x1,cloud.google.com/gke-accelerator-count=4,cloud.google.com/gke-tpu-dra-driver=true"
