@@ -83,7 +83,7 @@ items:
           tpuGen:
             string: v4
           uuid:
-            string: tpu-25541d5c-7c31-8412-d7cb-c8ebff2fa5c9
+            string: tpu-3c4df1c1-ee02-ee8c-f699-29358f06d4dc
       name: accel0
     - basic:
         attributes:
@@ -92,7 +92,7 @@ items:
           tpuGen:
             string: v4
           uuid:
-            string: tpu-25541d5c-7c31-8412-d7cb-c8ebff2fa5c9
+            string: tpu-1a9a1690-6cdf-c5ac-a95c-b2896d950946
       name: accel1
     driver: tpu.google.com
     nodeName: kind-control-plane

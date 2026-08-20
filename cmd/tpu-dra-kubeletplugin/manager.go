@@ -153,8 +153,7 @@ func (d *AllocatableDevice) GetDevice() resourceapi.Device {
 }
 
 func (tm *tpuManager) getTpuInfo(i int, f fs.DirEntry) *AllocatableDevice {
-	seed := os.Getenv("NODE_NAME")
-	uuid := tm.generateUUIDs(seed)
+	uuid := tm.generateUUIDs(deviceUUIDSeed(os.Getenv("NODE_NAME"), f.Name()))
 	allocatableDevice := &AllocatableDevice{
 		UUID:  uuid,
 		name:  f.Name(),
@@ -207,6 +206,16 @@ func (tm *tpuManager) enumerateAllPossibleTpuDevices() (AllocatableDevices, erro
 	return allocatableDevices, nil
 }
 
+// deviceUUIDSeed returns the seed used to derive a chip's UUID. TPUs expose no
+// hardware UUID, so the UUID is derived deterministically from the node name and
+// the chip's device file name (e.g. "accel0" or "0"), which is what identifies a
+// chip on the host and is also the ResourceSlice device name. This makes the
+// UUID unique per chip on a node and stable across plugin restarts.
+func deviceUUIDSeed(nodeName, deviceName string) string {
+	return nodeName + "/" + deviceName
+}
+
+// generateUUIDs derives a deterministic "tpu-<uuid>" string from seed.
 func (tm *tpuManager) generateUUIDs(seed string) string {
 	rand := rand.New(rand.NewSource(hash(seed)))
 
