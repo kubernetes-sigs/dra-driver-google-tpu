@@ -4,7 +4,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -399,4 +402,38 @@ func TestNormalizeTPULabels(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApplyNetworkSettings(t *testing.T) {
+	t.Run("writes succeed and read-back matches", func(t *testing.T) {
+		root := t.TempDir()
+		for _, s := range networkSettings {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(root, s.FilePath)), 0755); err != nil {
+				t.Fatalf("failed to create dir for %s: %v", s.FilePath, err)
+			}
+		}
+
+		if err := applyNetworkSettings(root); err != nil {
+			t.Fatalf("applyNetworkSettings() returned error, want nil: %v", err)
+		}
+
+		for _, s := range networkSettings {
+			got, err := os.ReadFile(filepath.Join(root, s.FilePath))
+			if err != nil {
+				t.Errorf("failed to read %s: %v", s.FilePath, err)
+				continue
+			}
+			if strings.TrimSpace(string(got)) != s.Value {
+				t.Errorf("%s = %q, want %q", s.FilePath, strings.TrimSpace(string(got)), s.Value)
+			}
+		}
+	})
+
+	t.Run("write failure is reported as error", func(t *testing.T) {
+		// Parent directories do not exist, so every write fails.
+		err := applyNetworkSettings(t.TempDir())
+		if err == nil {
+			t.Fatal("applyNetworkSettings() returned nil, want error when writes fail")
+		}
+	})
 }

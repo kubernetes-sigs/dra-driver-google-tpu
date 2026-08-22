@@ -509,7 +509,16 @@ func applyNetworkSettings(parentDir string) error {
 			errs = append(errs, filePath)
 			continue
 		}
-		klog.Infof("Current value of %s: %s", filePath, value)
+		// The kernel can clamp or normalize a sysctl-style value while still
+		// accepting the write, so verify the read-back matches what we wrote.
+		// Reads from /proc/sys carry a trailing newline, hence the trim.
+		got := strings.TrimSpace(string(value))
+		if got != setting.Value {
+			klog.Errorf("Value mismatch for %s: wrote %q, read back %q", filePath, setting.Value, got)
+			errs = append(errs, filePath)
+			continue
+		}
+		klog.Infof("Current value of %s: %s", filePath, got)
 	}
 	if len(errs) == 0 {
 		return nil
