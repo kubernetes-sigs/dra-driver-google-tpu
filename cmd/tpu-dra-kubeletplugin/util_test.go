@@ -515,3 +515,552 @@ func TestApplyNetworkSettings(t *testing.T) {
 		}
 	})
 }
+
+func TestCalculateTotalChips(t *testing.T) {
+	tests := []struct {
+		name         string
+		topologyDims []int64
+		want         int
+	}{
+		{
+			name:         "single chip",
+			topologyDims: []int64{1, 1, 1},
+			want:         1,
+		},
+		{
+			name:         "2x2x2",
+			topologyDims: []int64{2, 2, 2},
+			want:         8,
+		},
+		{
+			name:         "4x4x4",
+			topologyDims: []int64{4, 4, 4},
+			want:         64,
+		},
+		{
+			name:         "2x2x1",
+			topologyDims: []int64{2, 2, 1},
+			want:         4,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := calculateTotalChips(tt.topologyDims); got != tt.want {
+				t.Errorf("calculateTotalChips(%v) = %d, want %d", tt.topologyDims, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNumCores(t *testing.T) {
+	tests := []struct {
+		name         string
+		tpuGen       string
+		topologyDims []int64
+		want         int
+	}{
+		{
+			name:         "v4 has two cores per chip",
+			tpuGen:       "v4",
+			topologyDims: []int64{2, 2, 2},
+			want:         16,
+		},
+		{
+			name:         "v4lite has one core per chip",
+			tpuGen:       "v4lite",
+			topologyDims: []int64{2, 2, 2},
+			want:         8,
+		},
+		{
+			name:         "v5p",
+			tpuGen:       "v5p",
+			topologyDims: []int64{2, 2, 1},
+			want:         8,
+		},
+		{
+			name:         "v5lite",
+			tpuGen:       "v5lite",
+			topologyDims: []int64{2, 4, 1},
+			want:         8,
+		},
+		{
+			name:         "v5litepod",
+			tpuGen:       "v5litepod",
+			topologyDims: []int64{2, 2, 1},
+			want:         4,
+		},
+		{
+			name:         "v6e counts as lite",
+			tpuGen:       "v6e",
+			topologyDims: []int64{2, 2, 1},
+			want:         4,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := numCores(tt.tpuGen, tt.topologyDims)
+			if err != nil {
+				t.Fatalf("numCores() unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("numCores(%q, %v) = %d, want %d", tt.tpuGen, tt.topologyDims, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsSingleHost(t *testing.T) {
+	tests := []struct {
+		name         string
+		chipCount    int
+		topologyDims []int64
+		want         bool
+	}{
+		{
+			name:         "whole 2x2x2 on one host",
+			chipCount:    8,
+			topologyDims: []int64{2, 2, 2},
+			want:         true,
+		},
+		{
+			name:         "whole 2x2x1 on one host",
+			chipCount:    4,
+			topologyDims: []int64{2, 2, 1},
+			want:         true,
+		},
+		{
+			name:         "single chip",
+			chipCount:    1,
+			topologyDims: []int64{1, 1, 1},
+			want:         true,
+		},
+		{
+			name:         "count below the topology",
+			chipCount:    4,
+			topologyDims: []int64{2, 2, 2},
+			want:         false,
+		},
+		{
+			name:         "count above the topology",
+			chipCount:    16,
+			topologyDims: []int64{2, 2, 2},
+			want:         false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSingleHost(tt.chipCount, tt.topologyDims); got != tt.want {
+				t.Errorf("isSingleHost(%d, %v) = %v, want %v", tt.chipCount, tt.topologyDims, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConvertAcceleratorType(t *testing.T) {
+	tests := []struct {
+		name         string
+		tpuGen       string
+		topologyDims []int64
+		want         string
+	}{
+		{
+			name:         "v4",
+			tpuGen:       "v4",
+			topologyDims: []int64{2, 2, 2},
+			want:         "v4-16",
+		},
+		{
+			name:         "v4lite",
+			tpuGen:       "v4lite",
+			topologyDims: []int64{2, 2, 2},
+			want:         "v4lite-8",
+		},
+		{
+			name:         "v5p",
+			tpuGen:       "v5p",
+			topologyDims: []int64{2, 2, 1},
+			want:         "v5p-8",
+		},
+		{
+			name:         "v6e",
+			tpuGen:       "v6e",
+			topologyDims: []int64{2, 2, 1},
+			want:         "v6e-4",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := convertAcceleratorType(tt.tpuGen, tt.topologyDims)
+			if err != nil {
+				t.Fatalf("convertAcceleratorType() unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("convertAcceleratorType(%q, %v) = %q, want %q", tt.tpuGen, tt.topologyDims, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetChipsPerHostBounds(t *testing.T) {
+	// Only the counts in requestedChipCountToChipsPerDimNumaAligned resolve.
+	tests := []struct {
+		name               string
+		requestedChipCount int
+		want               string
+		wantErr            bool
+	}{
+		{
+			name:               "1 chip",
+			requestedChipCount: 1,
+			want:               "1,1,1",
+		},
+		{
+			name:               "2 chips",
+			requestedChipCount: 2,
+			want:               "1,2,1",
+		},
+		{
+			name:               "4 chips",
+			requestedChipCount: 4,
+			want:               "2,2,1",
+		},
+		{
+			name:               "8 chips",
+			requestedChipCount: 8,
+			want:               "2,4,1",
+		},
+		{
+			name:               "count with no entry",
+			requestedChipCount: 3,
+			wantErr:            true,
+		},
+		{
+			name:               "zero",
+			requestedChipCount: 0,
+			wantErr:            true,
+		},
+		{
+			name:               "negative",
+			requestedChipCount: -1,
+			wantErr:            true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := getChipsPerHostBounds(tt.requestedChipCount)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("getChipsPerHostBounds() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("getChipsPerHostBounds(%d) = %q, want %q", tt.requestedChipCount, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsPodslice(t *testing.T) {
+	tests := []struct {
+		name        string
+		accelerator string
+		want        bool
+	}{
+		{
+			name:        "podslice",
+			accelerator: "tpu-v4-podslice",
+			want:        true,
+		},
+		{
+			name:        "slice",
+			accelerator: "tpu-v3-slice",
+			want:        true,
+		},
+		{
+			name:        "lite podslice",
+			accelerator: "tpu-v5-lite-podslice",
+			want:        true,
+		},
+		{
+			name:        "device",
+			accelerator: "tpu-v3-device",
+			want:        false,
+		},
+		{
+			name:        "lite device",
+			accelerator: "tpu-v4-lite-device",
+			want:        false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isPodslice(tt.accelerator); got != tt.want {
+				t.Errorf("isPodslice(%q) = %v, want %v", tt.accelerator, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCubeOrLarger(t *testing.T) {
+	// The v4 cube is 4x4x4, so a dimension short of 4 disqualifies the whole shape.
+	tests := []struct {
+		name         string
+		topologyDims []int64
+		want         bool
+	}{
+		{
+			name:         "exactly the cube",
+			topologyDims: []int64{4, 4, 4},
+			want:         true,
+		},
+		{
+			name:         "larger than the cube",
+			topologyDims: []int64{8, 8, 8},
+			want:         true,
+		},
+		{
+			name:         "every dimension below",
+			topologyDims: []int64{2, 2, 2},
+			want:         false,
+		},
+		{
+			name:         "one dimension below",
+			topologyDims: []int64{4, 4, 2},
+			want:         false,
+		},
+		{
+			name:         "one dimension one short",
+			topologyDims: []int64{4, 4, 3},
+			want:         false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cubeOrLarger(tt.topologyDims); got != tt.want {
+				t.Errorf("cubeOrLarger(%v) = %v, want %v", tt.topologyDims, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWrapVersion(t *testing.T) {
+	tests := []struct {
+		name         string
+		topologyDims []int64
+		want         string
+	}{
+		{
+			name:         "cube wraps on every axis",
+			topologyDims: []int64{4, 4, 4},
+			want:         "true,true,true",
+		},
+		{
+			name:         "below the cube nothing wraps",
+			topologyDims: []int64{2, 2, 2},
+			want:         "false,false,false",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := wrapVersion(tt.topologyDims); got != tt.want {
+				t.Errorf("wrapVersion(%v) = %q, want %q", tt.topologyDims, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWrapLitePod(t *testing.T) {
+	tests := []struct {
+		name         string
+		topologyDims []int64
+		want         string
+	}{
+		{
+			name:         "both axes at the maximum",
+			topologyDims: []int64{vlpMaxTopologyDim, vlpMaxTopologyDim, 1},
+			want:         "true,true,false",
+		},
+		{
+			name:         "neither axis at the maximum",
+			topologyDims: []int64{8, 8, 1},
+			want:         "false,false,false",
+		},
+		{
+			name:         "one axis at the maximum",
+			topologyDims: []int64{8, vlpMaxTopologyDim, 1},
+			want:         "false,true,false",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := wrapLitePod(tt.topologyDims); got != tt.want {
+				t.Errorf("wrapLitePod(%v) = %q, want %q", tt.topologyDims, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWrap(t *testing.T) {
+	tests := []struct {
+		name         string
+		tpuGen       string
+		topologyDims []int64
+		want         string
+		wantErr      bool
+	}{
+		{
+			name:         "v3 takes the version rule",
+			tpuGen:       "v3",
+			topologyDims: []int64{4, 8, 1},
+			want:         "false,false,false",
+		},
+		{
+			name:         "v4 takes the version rule, cube wraps",
+			tpuGen:       "v4",
+			topologyDims: []int64{4, 4, 4},
+			want:         "true,true,true",
+		},
+		{
+			name:         "v4lite takes the version rule",
+			tpuGen:       "v4lite",
+			topologyDims: []int64{2, 2, 1},
+			want:         "false,false,false",
+		},
+		{
+			name:         "v5p takes the version rule, cube wraps",
+			tpuGen:       "v5p",
+			topologyDims: []int64{4, 4, 4},
+			want:         "true,true,true",
+		},
+		{
+			name:         "v5lite takes the lite pod rule",
+			tpuGen:       "v5lite",
+			topologyDims: []int64{2, 4, 1},
+			want:         "false,false,false",
+		},
+		{
+			name:         "v5litepod takes the lite pod rule, axis at the maximum wraps",
+			tpuGen:       "v5litepod",
+			topologyDims: []int64{8, vlpMaxTopologyDim, 1},
+			want:         "false,true,false",
+		},
+		{
+			name:         "v6e takes the lite pod rule, axis at the maximum wraps",
+			tpuGen:       "v6e",
+			topologyDims: []int64{8, vlpMaxTopologyDim, 1},
+			want:         "false,true,false",
+		},
+		{
+			name:         "unknown generation",
+			tpuGen:       "v99",
+			topologyDims: []int64{2, 2, 1},
+			wantErr:      true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := wrap(tt.tpuGen, tt.topologyDims)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("wrap() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("wrap(%q, %v) = %q, want %q", tt.tpuGen, tt.topologyDims, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestChipCount(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    int
+		wantErr bool
+	}{
+		{
+			name:  "single digit",
+			input: "4",
+			want:  4,
+		},
+		{
+			name:  "two digits",
+			input: "16",
+			want:  16,
+		},
+		{
+			name:    "not a number",
+			input:   "abc",
+			wantErr: true,
+		},
+		{
+			name:    "empty",
+			input:   "",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ChipCount(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ChipCount() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("ChipCount(%q) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAddSingleHostEnvs(t *testing.T) {
+	want := map[string]string{
+		"TPU_WORKER_ID":        "0",
+		"TPU_WORKER_HOSTNAMES": "localhost",
+	}
+	got := map[string]string{}
+	addSingleHostEnvs(got)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("addSingleHostEnvs() got = %v, want %v", got, want)
+	}
+}
+
+func TestApplyNetworkSettingsContinuesOnError(t *testing.T) {
+	if len(networkSettings) < 3 {
+		t.Fatalf("networkSettings has %d entries, want at least 3", len(networkSettings))
+	}
+	parentDir := t.TempDir()
+	for _, s := range networkSettings {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(parentDir, s.FilePath)), 0755); err != nil {
+			t.Fatalf("failed to create dir for %s: %v", s.FilePath, err)
+		}
+	}
+	// A directory where the file goes makes the write fail without touching the rest.
+	failPaths := []string{
+		filepath.Join(parentDir, networkSettings[0].FilePath),
+		filepath.Join(parentDir, networkSettings[1].FilePath),
+	}
+	for _, p := range failPaths {
+		if err := os.MkdirAll(p, 0755); err != nil {
+			t.Fatalf("failed to create failing path %s: %v", p, err)
+		}
+	}
+
+	err := applyNetworkSettings(parentDir)
+	if err == nil {
+		t.Fatal("applyNetworkSettings() = nil, want aggregated error")
+	}
+	if got, want := err.Error(), strings.Join(failPaths, "; "); got != want {
+		t.Errorf("applyNetworkSettings() error = %q, want %q", got, want)
+	}
+
+	for _, s := range networkSettings[2:] {
+		got, readErr := os.ReadFile(filepath.Join(parentDir, s.FilePath))
+		if readErr != nil {
+			t.Errorf("setting %s was not written after earlier failures: %v", s.FilePath, readErr)
+			continue
+		}
+		if string(got) != s.Value {
+			t.Errorf("setting %s = %q, want %q", s.FilePath, string(got), s.Value)
+		}
+	}
+}
