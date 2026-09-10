@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -604,5 +605,191 @@ func TestIsSingleHostNode(t *testing.T) {
 				t.Errorf("isSingleHostNode(%v) = %v, want %v", tc.labels, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestGetTPUNodeLabelsFromSources(t *testing.T) {
+	tests := []struct {
+		name     string
+		sources  []tpuLabelSource
+		hardware *tpuHardware
+		want     map[string]string
+		wantErr  bool
+	}{
+		{
+			name: "first source supplies all labels",
+			sources: []tpuLabelSource{
+				{
+					name: "mock source",
+					get: func(context.Context) (map[string]string, error) {
+						return map[string]string{
+							AcceleratorLabel:      "tpu-v6e-slice",
+							AcceleratorCountLabel: "4",
+							TopologyLabel:         "2x2",
+							ICIResiliency:         "true",
+						}, nil
+					},
+				},
+			},
+			hardware: &tpuHardware{devDirectory: "/dev", chipCount: 4},
+			want: map[string]string{
+				AcceleratorLabel:      "tpu-v6e-slice",
+				AcceleratorCountLabel: "4",
+				TopologyLabel:         "2x2",
+				ICIResiliency:         "true",
+			},
+		},
+		{
+			name: "first source has error, second source succeeds",
+			sources: []tpuLabelSource{
+				{
+					name: "failing source",
+					get: func(context.Context) (map[string]string, error) {
+						return nil, errors.New("source unavailable")
+					},
+				},
+				{
+					name: "successful source",
+					get: func(context.Context) (map[string]string, error) {
+						return map[string]string{
+							AcceleratorLabel:      "tpu-v6e-slice",
+							AcceleratorCountLabel: "4",
+							TopologyLabel:         "2x2",
+						}, nil
+					},
+				},
+			},
+			hardware: &tpuHardware{devDirectory: "/dev", chipCount: 4},
+			want: map[string]string{
+				AcceleratorLabel:      "tpu-v6e-slice",
+				AcceleratorCountLabel: "4",
+				TopologyLabel:         "2x2",
+			},
+		},
+		{
+			name: "source without accelerator is skipped",
+			sources: []tpuLabelSource{
+				{
+					name: "source without accelerator",
+					get: func(context.Context) (map[string]string, error) {
+						return map[string]string{
+							TopologyLabel: "2x2",
+						}, nil
+					},
+				},
+				{
+					name: "fallback source",
+					get: func(context.Context) (map[string]string, error) {
+						return map[string]string{
+							AcceleratorLabel:      "tpu-v6e-slice",
+							AcceleratorCountLabel: "4",
+							TopologyLabel:         "2x2",
+						}, nil
+					},
+				},
+			},
+			hardware: &tpuHardware{devDirectory: "/dev", chipCount: 4},
+			want: map[string]string{
+				AcceleratorLabel:      "tpu-v6e-slice",
+				AcceleratorCountLabel: "4",
+				TopologyLabel:         "2x2",
+			},
+		},
+		{
+			name: "hardware fills chip count and single-host topology",
+			sources: []tpuLabelSource{
+				{
+					name: "accelerator only",
+					get: func(context.Context) (map[string]string, error) {
+						return map[string]string{
+							AcceleratorLabel: "tpu-v6e-slice",
+						}, nil
+					},
+				},
+			},
+			hardware: &tpuHardware{devDirectory: "/dev", chipCount: 4},
+			want: map[string]string{
+				AcceleratorLabel:      "tpu-v6e-slice",
+				AcceleratorCountLabel: "4",
+				TopologyLabel:         "2x2",
+			},
+		},
+		{
+			name: "no source knows the accelerator",
+			sources: []tpuLabelSource{
+				{
+					name: "empty source",
+					get: func(context.Context) (map[string]string, error) {
+						return nil, errors.New("not found")
+					},
+				},
+			},
+			hardware: &tpuHardware{devDirectory: "/dev", chipCount: 4},
+			wantErr:  true,
+		},
+		{
+			name:     "empty sources list",
+			sources:  nil,
+			hardware: &tpuHardware{devDirectory: "/dev", chipCount: 4},
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			labels, err := getTPUNodeLabelsFromSources(context.Background(), tt.sources, tt.hardware)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("getTPUNodeLabelsFromSources: %v", err)
+			}
+			if !reflect.DeepEqual(labels, tt.want) {
+				t.Errorf("labels = %v, want %v", labels, tt.want)
+			}
+		})
+	}
+}
+
+func TestDefaultTPULabelSources(t *testing.T) {
+	config := &Config{
+		flags: &Flags{
+			tpuAccelerator: "tpu-v6e-slice",
+			tpuChipCount:   "4",
+		},
+	}
+	sources := defaultTPULabelSources(config)
+	if len(sources) != 4 {
+		t.Fatalf("defaultTPULabelSources returned %d sources, want 4", len(sources))
+	}
+
+	// First source is driver configuration and should resolve with the given flags.
+	got, err := sources[0].get(context.Background())
+	if err != nil {
+		t.Fatalf("driver configuration source error: %v", err)
+	}
+	if got[AcceleratorLabel] != "tpu-v6e-slice" {
+		t.Errorf("AcceleratorLabel = %q, want %q", got[AcceleratorLabel], "tpu-v6e-slice")
+	}
+}
+
+func TestGetTPUNodeLabelsWithConfig(t *testing.T) {
+	config := &Config{
+		flags: &Flags{
+			tpuAccelerator: "tpu-v6e-slice",
+			tpuChipCount:   "4",
+			tpuTopology:    "2x2",
+		},
+	}
+	hardware := &tpuHardware{devDirectory: "/dev", chipCount: 4}
+	labels, err := getTPUNodeLabels(context.Background(), config, hardware)
+	if err != nil {
+		t.Fatalf("getTPUNodeLabels() unexpected error: %v", err)
+	}
+	if labels[AcceleratorLabel] != "tpu-v6e-slice" {
+		t.Errorf("AcceleratorLabel = %q, want %q", labels[AcceleratorLabel], "tpu-v6e-slice")
 	}
 }
