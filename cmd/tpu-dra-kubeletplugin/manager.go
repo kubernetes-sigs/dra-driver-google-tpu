@@ -36,9 +36,11 @@ const (
 	tpuV4DeviceRegex        = `^accel[0-9]*$`
 	tpuDeviceNumericalRegex = `^\d+$`
 	defaultDeviceID         = "vfio"
-	libtpuLogDir            = "/tmp/tpu_logs"
-	DevicePluginPath        = "/var/lib/kubelet/plugins/tpu.google.com"
-	LogDir                  = DevicePluginPath + "/logs"
+	// libtpuLogDir is the host path that libtpu writes its logs to. It is shared by
+	// every claim on the node and tailed by the log collector sidecar.
+	libtpuLogDir     = "/tmp/tpu_logs"
+	DevicePluginPath = "/var/lib/kubelet/plugins/tpu.google.com"
+	LogDir           = DevicePluginPath + "/logs"
 )
 
 type AllocatableDevices map[string]*AllocatableDevice

@@ -40,8 +40,9 @@ type driver struct {
 	healthchecker *TPUHealthChecker
 	// health fans device health reports out to WatchHealthStatus
 	// subscriptions (see device_health_status.go).
-	health *healthBroadcaster
-	config *Config
+	health       *healthBroadcaster
+	config       *Config
+	sharesPolicy consumableSharesPolicy
 }
 
 func NewDriver(ctx context.Context,
@@ -78,8 +79,22 @@ func NewDriver(ctx context.Context,
 
 	devDir := hardware.devDirectory
 
+	// Resolve the sharing policy once, before any state is built, so that the
+	// advertisement and teardown paths cannot disagree about it.
+	sharesPolicy := resolveConsumableShares(config.flags.consumableShares, nodeLabels)
+	if sharesPolicy.enabled {
+		if sharesPolicy.unlimited {
+			klog.Info("Consumable shares enabled: an unlimited number of claims may share this node's TPU chips")
+		} else {
+			klog.Infof("Consumable shares enabled: up to %d claims may share this node's TPU chips", sharesPolicy.shares)
+		}
+		klog.Info("Consumable shares requires the DRAConsumableCapacity feature gate on the API server and " +
+			"scheduler; without it the sharing fields are dropped from published ResourceSlices and claims " +
+			"will not co-schedule")
+	}
+
 	triggerPublishChan := make(chan interface{}, 1)
-	state, err := NewDeviceState(config, nodeLabels, devDir, triggerPublishChan)
+	state, err := NewDeviceState(config, nodeLabels, devDir, triggerPublishChan, sharesPolicy)
 	if err != nil {
 		return nil, err
 	}
@@ -96,6 +111,7 @@ func NewDriver(ctx context.Context,
 		config:        config,
 		healthchecker: hc,
 		health:        health,
+		sharesPolicy:  sharesPolicy,
 	}
 
 	helper, err := kubeletplugin.Start(
@@ -139,7 +155,9 @@ func (d *driver) GatherStateAndPublish(ctx context.Context) error {
 		for _, device := range d.deviceState.allocatable {
 			if device.allocatable {
 				klog.Info("Appending Device", device)
-				resourceSlice.Devices = append(resourceSlice.Devices, device.GetDevice())
+				dev := device.GetDevice()
+				applyConsumableShares(&dev, d.sharesPolicy)
+				resourceSlice.Devices = append(resourceSlice.Devices, dev)
 			}
 		}
 	}()

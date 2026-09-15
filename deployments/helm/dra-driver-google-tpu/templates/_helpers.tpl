@@ -95,3 +95,16 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Render .Values.featureGates as the comma separated key=value list that
+component-base's --feature-gates flag expects. Sorted for a stable rendering,
+and with no trailing comma, which the flag parser rejects.
+*/}}
+{{- define "dra-driver-google-tpu.featureGates" -}}
+{{- $pairs := list -}}
+{{- range $name, $enabled := .Values.featureGates -}}
+{{- $pairs = append $pairs (printf "%s=%v" $name $enabled) -}}
+{{- end -}}
+{{- join "," (sortAlpha $pairs) -}}
+{{- end }}

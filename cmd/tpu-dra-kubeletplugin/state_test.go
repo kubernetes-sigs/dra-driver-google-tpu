@@ -17,6 +17,8 @@ limitations under the License.
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	resourceapi "k8s.io/api/resource/v1"
@@ -158,5 +160,163 @@ func TestPrepareDevicesIgnoresForeignAllocationResults(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func checkpointWithClaims(claimUIDs ...string) *Checkpoint {
+	cp := newCheckpoint()
+	for _, uid := range claimUIDs {
+		cp.V1.PreparedClaims[uid] = PreparedDevices{}
+	}
+	return cp
+}
+
+func TestHasOtherPreparedClaims(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		checkpoint *Checkpoint
+		claimUID   string
+		want       bool
+	}{
+		{"nil checkpoint", nil, "claim-a", false},
+		{"nil V1", &Checkpoint{}, "claim-a", false},
+		{"empty checkpoint", checkpointWithClaims(), "claim-a", false},
+		{
+			// Unprepare removes the claim from the checkpoint only after teardown
+			// succeeds, so the claim being unprepared is still present here.
+			name:       "only the claim being unprepared",
+			checkpoint: checkpointWithClaims("claim-a"),
+			claimUID:   "claim-a",
+			want:       false,
+		},
+		{
+			name:       "one co-tenant",
+			checkpoint: checkpointWithClaims("claim-a", "claim-b"),
+			claimUID:   "claim-a",
+			want:       true,
+		},
+		{
+			name:       "several co-tenants",
+			checkpoint: checkpointWithClaims("claim-a", "claim-b", "claim-c"),
+			claimUID:   "claim-a",
+			want:       true,
+		},
+		{
+			name:       "claim not in checkpoint but others are",
+			checkpoint: checkpointWithClaims("claim-b"),
+			claimUID:   "claim-a",
+			want:       true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasOtherPreparedClaims(tc.checkpoint, tc.claimUID); got != tc.want {
+				t.Errorf("hasOtherPreparedClaims(%v) = %v, want %v", tc.claimUID, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestUnprepareDevicesLogTeardown covers the behavior change that makes sharing
+// safe: the libtpu log directory is a single host path shared by every claim on
+// the node and tailed by the log collector sidecar, so one claim exiting must
+// not delete a co-tenant's live logs.
+func TestUnprepareDevicesLogTeardown(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		policy     consumableSharesPolicy
+		checkpoint *Checkpoint
+		wantKept   bool
+	}{
+		{
+			// Without sharing a claim holds the node exclusively, so the
+			// unconditional teardown that predates this feature is correct and
+			// must be preserved.
+			name:       "sharing disabled wipes even with other claims checkpointed",
+			policy:     consumableSharesPolicy{},
+			checkpoint: checkpointWithClaims("claim-a", "claim-b"),
+			wantKept:   false,
+		},
+		{
+			name:       "sharing enabled keeps logs while a co-tenant holds the chips",
+			policy:     consumableSharesPolicy{enabled: true, shares: 4},
+			checkpoint: checkpointWithClaims("claim-a", "claim-b"),
+			wantKept:   true,
+		},
+		{
+			name:       "sharing enabled wipes when the last claim leaves",
+			policy:     consumableSharesPolicy{enabled: true, shares: 4},
+			checkpoint: checkpointWithClaims("claim-a"),
+			wantKept:   false,
+		},
+		{
+			name:       "unlimited sharing keeps logs while a co-tenant holds the chips",
+			policy:     consumableSharesPolicy{enabled: true, unlimited: true},
+			checkpoint: checkpointWithClaims("claim-a", "claim-b"),
+			wantKept:   true,
+		},
+		{
+			name:       "unlimited sharing wipes when the last claim leaves",
+			policy:     consumableSharesPolicy{enabled: true, unlimited: true},
+			checkpoint: checkpointWithClaims("claim-a"),
+			wantKept:   false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logDir := t.TempDir()
+			marker := filepath.Join(logDir, "tpu_driver.INFO")
+			if err := os.WriteFile(marker, []byte("live log from a co-tenant"), 0o600); err != nil {
+				t.Fatalf("seeding log dir: %v", err)
+			}
+
+			state := &DeviceState{sharesPolicy: tc.policy, tpuLogDir: logDir}
+			if err := state.unprepareDevices("claim-a", tc.checkpoint); err != nil {
+				t.Fatalf("unprepareDevices: %v", err)
+			}
+
+			_, err := os.Stat(marker)
+			switch {
+			case tc.wantKept && os.IsNotExist(err):
+				t.Error("log file was deleted while another claim still held the chips")
+			case tc.wantKept && err != nil:
+				t.Errorf("unexpected error stating log file: %v", err)
+			case !tc.wantKept && err == nil:
+				t.Error("log file should have been removed once no other claim held the chips")
+			case !tc.wantKept && !os.IsNotExist(err):
+				t.Errorf("unexpected error stating log file: %v", err)
+			}
+		})
+	}
+}
+
+// TestUnprepareDevicesOnMultiHostNode pins the interaction between the
+// multi-host guard and teardown. resolveConsumableShares returns a disabled
+// policy for a multi-host node, so such a node keeps the unconditional wipe
+// even when the operator asked for sharing.
+func TestUnprepareDevicesOnMultiHostNode(t *testing.T) {
+	withConsumableSharesGate(t, true)
+
+	multiHostLabels := map[string]string{
+		AcceleratorLabel:      "tpu-v4-podslice",
+		TopologyLabel:         "4x4x4",
+		AcceleratorCountLabel: "4",
+	}
+	policy := resolveConsumableShares("4", multiHostLabels)
+	if policy.enabled {
+		t.Fatal("a multi-host node must not resolve to an enabled sharing policy")
+	}
+
+	logDir := t.TempDir()
+	marker := filepath.Join(logDir, "tpu_driver.INFO")
+	if err := os.WriteFile(marker, []byte("log"), 0o600); err != nil {
+		t.Fatalf("seeding log dir: %v", err)
+	}
+
+	state := &DeviceState{sharesPolicy: policy, tpuLogDir: logDir}
+	if err := state.unprepareDevices("claim-a", checkpointWithClaims("claim-a", "claim-b")); err != nil {
+		t.Fatalf("unprepareDevices: %v", err)
+	}
+
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Error("a multi-host node should keep the pre-feature teardown behavior and wipe the log dir")
 	}
 }

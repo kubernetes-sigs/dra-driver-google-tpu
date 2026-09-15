@@ -1,0 +1,70 @@
+# Unlimited sharing: any number of claims may be allocated this node's TPU chips.
+#
+# Run the driver with:
+#   --feature-gates ConsumableShares=true --consumable-shares unlimited
+#
+# Do NOT add `capacity: requests: shares:` to a claim in this mode. The driver
+# publishes no `shares` capacity when sharing is unlimited, and the scheduler
+# silently skips any device that does not publish a capacity the claim asks for,
+# so such a pod would stay Pending with no diagnostic.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tpu-share
+
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  namespace: tpu-share
+  name: shared-tpus
+spec:
+  spec:
+    devices:
+      requests:
+      - name: tpus
+        exactly:
+          deviceClassName: tpu.google.com
+          allocationMode: All
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: tpu-share
+  name: unlimited-sharing
+  labels:
+    app: unlimited-sharing
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: unlimited-sharing
+  template:
+    metadata:
+      labels:
+        app: unlimited-sharing
+    spec:
+      tolerations:
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: ctr
+        image: busybox:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Pod: $HOSTNAME"
+          echo "Visible TPU devices:"
+          ls /dev/ | grep -E 'accel|vfio' || echo "  none"
+          echo "Sleeping indefinitely..."
+          sleep infinity
+        resources:
+          claims:
+          - name: tpus
+      resourceClaims:
+      - name: tpus
+        resourceClaimTemplateName: shared-tpus

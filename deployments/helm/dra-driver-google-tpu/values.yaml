@@ -11,6 +11,24 @@ allowDefaultNamespace: false
 
 deviceClasses: ["tpu"]
 
+# Feature gates for the kubelet plugin, as a map of gate name to bool.
+# e.g. featureGates: { ConsumableShares: true }
+featureGates: {}
+
+# How many ResourceClaims may share the TPU chips on a node:
+#   "disabled"  - a single claim holds the chips (default)
+#   "unlimited" - any number of claims may share them
+#   "<N>"       - at most N claims may share them
+#
+# Requires featureGates.ConsumableShares=true and a cluster with the
+# DRAConsumableCapacity feature gate enabled on the API server and scheduler.
+# Only single-host TPU nodes can share; on a multi-host slice this is ignored.
+#
+# Sharing lets claims co-schedule and mount the same chips. It does NOT let two
+# processes drive a chip at the same time: the TPU runtime takes an exclusive
+# lock when a process opens a chip.
+consumableShares: "disabled"
+
 imagePullSecrets: []
 image:
   repository: registry.k8s.io/dra-driver-google/dra-driver-google-tpu

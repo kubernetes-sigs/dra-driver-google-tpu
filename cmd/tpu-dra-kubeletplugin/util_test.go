@@ -515,3 +515,94 @@ func TestApplyNetworkSettings(t *testing.T) {
 		}
 	})
 }
+
+func TestIsSingleHostNode(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		labels map[string]string
+		want   bool
+	}{
+		{
+			name: "single-host podslice: 4 chips, 2x2x1 topology",
+			labels: map[string]string{
+				AcceleratorLabel:      "tpu-v4-podslice",
+				TopologyLabel:         "2x2x1",
+				AcceleratorCountLabel: "4",
+			},
+			want: true,
+		},
+		{
+			name: "single-host podslice: 8 chips, 2x4 topology",
+			labels: map[string]string{
+				AcceleratorLabel:      "tpu-v5-lite-podslice",
+				TopologyLabel:         "2x4",
+				AcceleratorCountLabel: "8",
+			},
+			want: true,
+		},
+		{
+			name: "multi-host podslice: 4 chips of a 4x4x4 slice",
+			labels: map[string]string{
+				AcceleratorLabel:      "tpu-v4-podslice",
+				TopologyLabel:         "4x4x4",
+				AcceleratorCountLabel: "4",
+			},
+			want: false,
+		},
+		{
+			name: "non-slice accelerators are single-host by definition",
+			labels: map[string]string{
+				AcceleratorLabel:      "tpu-v5-lite-device",
+				AcceleratorCountLabel: "1",
+			},
+			want: true,
+		},
+		{
+			// getTPUNodeLabels normally fills this in via completeLabelsFromHardware,
+			// so reaching here means neither the platform nor the hardware could
+			// supply a topology.
+			name: "podslice with no topology label is treated as multi-host",
+			labels: map[string]string{
+				AcceleratorLabel:      "tpu-v4-podslice",
+				AcceleratorCountLabel: "4",
+			},
+			want: false,
+		},
+		{
+			// completeLabelsFromHardware assumes a single-host topology for a chip
+			// count it recognizes, trimming trailing unit dimensions (4 chips ->
+			// "2x2"). Such a node must come out single-host.
+			name: "topology inferred from hardware by completeLabelsFromHardware",
+			labels: func() map[string]string {
+				labels := map[string]string{AcceleratorLabel: "tpu-v4-podslice"}
+				completeLabelsFromHardware(labels, &tpuHardware{chipCount: 4})
+				return labels
+			}(),
+			want: true,
+		},
+		{
+			name: "unparsable topology is treated as multi-host",
+			labels: map[string]string{
+				AcceleratorLabel:      "tpu-v4-podslice",
+				TopologyLabel:         "not-a-topology",
+				AcceleratorCountLabel: "4",
+			},
+			want: false,
+		},
+		{
+			name: "unparsable chip count is treated as multi-host",
+			labels: map[string]string{
+				AcceleratorLabel:      "tpu-v4-podslice",
+				TopologyLabel:         "2x2x1",
+				AcceleratorCountLabel: "",
+			},
+			want: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSingleHostNode(tc.labels); got != tc.want {
+				t.Errorf("isSingleHostNode(%v) = %v, want %v", tc.labels, got, tc.want)
+			}
+		})
+	}
+}

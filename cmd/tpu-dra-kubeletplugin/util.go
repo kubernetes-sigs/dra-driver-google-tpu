@@ -475,6 +475,45 @@ func isSingleHost(chipCount int, topologyDims []int64) (bool, error) {
 	return chipCount == totalChips, nil
 }
 
+// isSingleHostNode reports whether the TPU chips on this node make up an entire
+// slice, the only topology where sharing is supported.
+//
+// Non-podslice devices are single-host by definition. For podslices, a node is
+// single-host when its chip count equals the product of the slice topology dimensions.
+// If topology or chip count is missing or unparseable, the node is treated as
+// multi-host to safely prevent sharing chips that belong to a larger slice.
+func isSingleHostNode(nodeLabels map[string]string) bool {
+	if !isPodslice(nodeLabels[AcceleratorLabel]) {
+		return true
+	}
+
+	topology := nodeLabels[TopologyLabel]
+	if topology == "" {
+		klog.Warningf("node label %s is not set and no single-host topology could be inferred "+
+			"from the hardware; treating the node as multi-host to prevent unsafe sharing across slice boundaries", TopologyLabel)
+		return false
+	}
+	topologyDims, err := getTopologyDims(topology)
+	if err != nil {
+		klog.Warningf("cannot parse node label %s=%q: %v; treating the node as multi-host to prevent unsafe sharing across slice boundaries", TopologyLabel, topology, err)
+		return false
+	}
+
+	chipCount, err := ChipCount(nodeLabels[AcceleratorCountLabel])
+	if err != nil {
+		klog.Warningf("cannot parse node label %s=%q: %v; treating the node as multi-host to prevent unsafe sharing across slice boundaries",
+			AcceleratorCountLabel, nodeLabels[AcceleratorCountLabel], err)
+		return false
+	}
+
+	singleHost, err := isSingleHost(chipCount, topologyDims)
+	if err != nil {
+		klog.Warningf("cannot determine whether node is single-host: %v; treating the node as multi-host to prevent unsafe sharing across slice boundaries", err)
+		return false
+	}
+	return singleHost
+}
+
 func wrap(tpuGen string, topologyDims []int64) (string, error) {
 	switch tpuGen {
 	case "v3", "v4", "v4lite", "v5p":

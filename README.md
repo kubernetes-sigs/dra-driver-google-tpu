@@ -437,6 +437,37 @@ make test-e2e
 
 ---
 
+## Sharing TPU chips between claims (alpha)
+
+By default the chips on a TPU node are allocated to exactly one `ResourceClaim`.
+The `ConsumableShares` feature gate lets several claims be allocated the same
+chips:
+
+```bash
+helm upgrade -i dra-driver-google-tpu deployments/helm/dra-driver-google-tpu \
+  --set featureGates.ConsumableShares=true \
+  --set consumableShares=2      # or "unlimited"
+```
+
+**Sharing lets claims co-schedule and mount the same chips. It does not let two
+processes drive a chip at the same time.** The TPU runtime takes an exclusive
+lock when a process opens a chip. It is meant for a single runtime owner plus
+sidecars (profilers, exporters, log shippers, a serving proxy), or for workloads
+that use the chips one after another.
+
+Requirements and caveats:
+
+* Kubernetes with the `DRAConsumableCapacity` feature gate. **Without it,
+  sharing silently does not happen.** The API server drops the fields and pods
+  simply never co-schedule.
+* Single-host nodes only. On a multi-host slice the driver logs a warning and
+  advertises devices without sharing.
+* No isolation. A share is an admission-control count, not an HBM or compute
+  quota.
+
+See [demo/specs/consumable-shares](demo/specs/consumable-shares/) for runnable
+examples.
+
 ## References
 
 For more information on the DRA Kubernetes feature and developing custom resource drivers, see the following resources:

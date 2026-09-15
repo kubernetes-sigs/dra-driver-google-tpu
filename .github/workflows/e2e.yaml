@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 env:
-  K8S_VERSION: "v1.35.0"
+  K8S_VERSION: "v1.37.0"
   KIND_VERSION: "v0.32.0"
 
 jobs:

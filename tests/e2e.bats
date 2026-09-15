@@ -45,6 +45,19 @@ device_attribute() {
     -o jsonpath="{.items[?(@.spec.nodeName=='$1')].spec.devices[0].attributes.$2.$3}"
 }
 
+# slice_device_allow_multiple_allocations NODE reports whether the node's devices
+# allow multiple claim allocations.
+slice_device_allow_multiple_allocations() {
+  kubectl get resourceslice \
+    -o jsonpath="{.items[?(@.spec.nodeName=='$1')].spec.devices[0].allowMultipleAllocations}"
+}
+
+# slice_device_shares NODE reports the shares capacity published on the node's devices.
+slice_device_shares() {
+  kubectl get resourceslice \
+    -o jsonpath="{.items[?(@.spec.nodeName=='$1')].spec.devices[0].capacity.shares.value}"
+}
+
 # slice_uuids NODE lists the uuid attribute of every device on the node, sorted.
 slice_uuids() {
   kubectl get resourceslice \
@@ -81,6 +94,7 @@ teardown() {
   if [[ -z "${BATS_TEST_COMPLETED:-}" ]]; then
     dump_debug_info
   fi
+  kubectl delete namespace tpu-share --ignore-not-found --wait=false 2>/dev/null || true
 }
 
 dump_debug_info() {
@@ -184,6 +198,86 @@ dump_debug_info() {
   assert_output "2x2"
 
   kubectl delete -f "$PROJECT_DIR/demo/specs/tpu-test.yaml" --wait --timeout=90s
+}
+
+@test "enabling consumable shares publishes sharing capacity on the resourceslice" {
+  "$PROJECT_DIR/demo/scripts/install-dra-driver.sh" \
+    --set kubeletPlugin.containers.networkOptimizer.enabled=false \
+    --set kubeletPlugin.containers.logCollector.enabled=false \
+    --set kubeletPlugin.containers.vbarControlAgent.enabled=false \
+    --set kubeletPlugin.tolerations[1].operator=Exists \
+    --set featureGates.ConsumableShares=true \
+    --set consumableShares=2
+  kubectl rollout status "daemonset/$DAEMONSET" --namespace "$NAMESPACE" --timeout=180s
+
+  assert_eventually "true" slice_device_allow_multiple_allocations "$(tpu_node)"
+  assert_eventually "2" slice_device_shares "$(tpu_node)"
+}
+
+@test "multiple workloads can share the TPU chips up to the configured share limit" {
+  kubectl apply -f "$PROJECT_DIR/demo/specs/consumable-shares/integer-sharing.yaml"
+  kubectl wait --timeout=120s --for=condition=ready pods --namespace tpu-share -l app=capped-sharing
+
+  local pods
+  pods=$(kubectl get pods --namespace tpu-share -l app=capped-sharing -o jsonpath='{.items[*].metadata.name}')
+  for pod in $pods; do
+    run kubectl get pod --namespace tpu-share "$pod" -o jsonpath='{.spec.nodeName}'
+    assert_success
+    assert_output "$(tpu_node)"
+
+    run kubectl exec --namespace tpu-share "$pod" -- sh -c 'ls /dev | grep -c accel'
+    assert_success
+    assert_output "4"
+  done
+
+  # Scaling past the 2-share capacity leaves the additional pod Pending.
+  kubectl scale deployment capped-sharing --namespace tpu-share --replicas=3
+  sleep 10
+  run kubectl get pods --namespace tpu-share --field-selector=status.phase=Pending -o jsonpath='{.items[*].metadata.name}'
+  assert_success
+  assert [ -n "$output" ]
+
+  kubectl delete -f "$PROJECT_DIR/demo/specs/consumable-shares/integer-sharing.yaml" --wait --timeout=90s
+}
+
+@test "unlimited consumable shares permits any number of workloads without capacity cap" {
+  "$PROJECT_DIR/demo/scripts/install-dra-driver.sh" \
+    --set kubeletPlugin.containers.networkOptimizer.enabled=false \
+    --set kubeletPlugin.containers.logCollector.enabled=false \
+    --set kubeletPlugin.containers.vbarControlAgent.enabled=false \
+    --set kubeletPlugin.tolerations[1].operator=Exists \
+    --set featureGates.ConsumableShares=true \
+    --set consumableShares=unlimited
+  kubectl rollout status "daemonset/$DAEMONSET" --namespace "$NAMESPACE" --timeout=180s
+
+  assert_eventually "true" slice_device_allow_multiple_allocations "$(tpu_node)"
+  assert_eventually "" slice_device_shares "$(tpu_node)"
+
+  kubectl apply -f "$PROJECT_DIR/demo/specs/consumable-shares/unlimited-sharing.yaml"
+  kubectl wait --timeout=120s --for=condition=ready pods --namespace tpu-share -l app=unlimited-sharing
+
+  local pods
+  pods=$(kubectl get pods --namespace tpu-share -l app=unlimited-sharing -o jsonpath='{.items[*].metadata.name}')
+  for pod in $pods; do
+    run kubectl get pod --namespace tpu-share "$pod" -o jsonpath='{.spec.nodeName}'
+    assert_success
+    assert_output "$(tpu_node)"
+
+    run kubectl exec --namespace tpu-share "$pod" -- sh -c 'ls /dev | grep -c accel'
+    assert_success
+    assert_output "4"
+  done
+
+  kubectl delete -f "$PROJECT_DIR/demo/specs/consumable-shares/unlimited-sharing.yaml" --wait --timeout=90s
+
+  # Restore driver to default disabled sharing before subsequent tests
+  "$PROJECT_DIR/demo/scripts/install-dra-driver.sh" \
+    --set kubeletPlugin.containers.networkOptimizer.enabled=false \
+    --set kubeletPlugin.containers.logCollector.enabled=false \
+    --set kubeletPlugin.containers.vbarControlAgent.enabled=false \
+    --set kubeletPlugin.tolerations[1].operator=Exists
+  kubectl rollout status "daemonset/$DAEMONSET" --namespace "$NAMESPACE" --timeout=180s
+  assert_eventually "" slice_device_allow_multiple_allocations "$(tpu_node)"
 }
 
 # Kept last: it takes the accelerator label away from the node.

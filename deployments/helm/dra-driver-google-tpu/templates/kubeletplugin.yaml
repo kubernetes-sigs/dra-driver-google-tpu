@@ -101,6 +101,12 @@ spec:
         - name: TPU_ICI_RESILIENCY
           value: {{ . | quote }}
         {{- end }}
+        {{- with (include "dra-driver-google-tpu.featureGates" .) }}
+        - name: FEATURE_GATES
+          value: {{ . | quote }}
+        {{- end }}
+        - name: CONSUMABLE_SHARES
+          value: {{ .Values.consumableShares | quote }}
         volumeMounts:
         - name: kube-api-access
           mountPath: /var/run/secrets/kubernetes.io/serviceaccount

@@ -34,7 +34,7 @@ import (
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
 
-	"sigs.k8s.io/dra-driver-google-tpu/pkg/flags"
+	pkgflags "sigs.k8s.io/dra-driver-google-tpu/pkg/flags"
 )
 
 const (
@@ -48,8 +48,7 @@ const (
 )
 
 type Flags struct {
-	kubeClientConfig flags.KubeClientConfig
-	loggingConfig    *flags.LoggingConfig
+	kubeClientConfig pkgflags.KubeClientConfig
 
 	nodeName      string
 	cdiRoot       string
@@ -57,6 +56,7 @@ type Flags struct {
 
 	kubeletRegistrarDirectoryPath string
 	kubeletPluginsDirectoryPath   string
+	consumableShares              string
 
 	// TPU properties of the node. When left empty they are auto discovered.
 	tpuAccelerator   string
@@ -86,9 +86,9 @@ func main() {
 }
 
 func newApp() *cli.App {
-	flags := &Flags{
-		loggingConfig: flags.NewLoggingConfig(),
-	}
+	featureGateConfig := pkgflags.NewFeatureGateConfig()
+	loggingConfig := pkgflags.NewLoggingConfig()
+	flags := &Flags{}
 	cliFlags := []cli.Flag{
 		&cli.StringFlag{
 			Name:        "node-name",
@@ -155,9 +155,22 @@ func newApp() *cli.App {
 			Destination: &flags.tpuEnvFilePath,
 			EnvVars:     []string{"TPU_ENV_FILE"},
 		},
+		&cli.StringFlag{
+			Name: "consumable-shares",
+			Usage: "How many ResourceClaims may share the TPU chips on a node: 'disabled', " +
+				"'unlimited', or a positive integer. Requires the ConsumableShares feature gate " +
+				"and a cluster with DRAConsumableCapacity enabled. Only single-host nodes can " +
+				"share; on a multi-host slice this setting is ignored. Note that sharing lets " +
+				"claims co-schedule and mount the same chips, it does not let two processes " +
+				"drive a chip at the same time.",
+			Value:       consumableSharesDisabled,
+			Destination: &flags.consumableShares,
+			EnvVars:     []string{"CONSUMABLE_SHARES"},
+		},
 	}
 	cliFlags = append(cliFlags, flags.kubeClientConfig.Flags()...)
-	cliFlags = append(cliFlags, flags.loggingConfig.Flags()...)
+	cliFlags = append(cliFlags, featureGateConfig.Flags()...)
+	cliFlags = append(cliFlags, loggingConfig.Flags()...)
 
 	app := &cli.App{
 		Name:            "tpu-dra-kubeletplugin",
@@ -169,10 +182,13 @@ func newApp() *cli.App {
 			if c.Args().Len() > 0 {
 				return fmt.Errorf("arguments not supported: %v", c.Args().Slice())
 			}
-			return flags.loggingConfig.Apply()
+			return loggingConfig.Apply()
 		},
 		Action: func(c *cli.Context) error {
 			ctx := c.Context
+			if err := validateConsumableShares(flags.consumableShares); err != nil {
+				return err
+			}
 			flags.deviceClasses = sets.New[string](c.StringSlice("device-classes")...)
 			clientSets, err := flags.kubeClientConfig.NewClientSets()
 			if err != nil {

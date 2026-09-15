@@ -53,9 +53,21 @@ type DeviceState struct {
 	checkpointManager checkpointmanager.CheckpointManager
 	tm                *tpuManager
 	publishchan       chan interface{}
+	sharesPolicy      consumableSharesPolicy
+	tpuLogDir         string
 }
 
-func NewDeviceState(config *Config, nodeLabels map[string]string, devDir string, publishChan chan interface{}) (*DeviceState, error) {
+func (s *DeviceState) logDir() string {
+	if s.tpuLogDir != "" {
+		return s.tpuLogDir
+	}
+	if s.tm != nil && s.tm.tpuLogDir != "" {
+		return s.tm.tpuLogDir
+	}
+	return libtpuLogDir
+}
+
+func NewDeviceState(config *Config, nodeLabels map[string]string, devDir string, publishChan chan interface{}, sharesPolicy consumableSharesPolicy) (*DeviceState, error) {
 	klog.Info("Creating new DeviceState")
 
 	tm, err := NewTPUManager(nodeLabels, devDir)
@@ -88,6 +100,8 @@ func NewDeviceState(config *Config, nodeLabels map[string]string, devDir string,
 		checkpointManager: checkpointManager,
 		tm:                tm,
 		publishchan:       publishChan,
+		sharesPolicy:      sharesPolicy,
+		tpuLogDir:         tm.tpuLogDir,
 	}
 
 	checkpoints, err := state.checkpointManager.ListCheckpoints()
@@ -158,7 +172,7 @@ func (s *DeviceState) Unprepare(ctx context.Context, claimUID string) error {
 		return nil
 	}
 
-	if err := s.unprepareDevices(claimUID); err != nil {
+	if err := s.unprepareDevices(claimUID, checkpoint); err != nil {
 		return fmt.Errorf("unprepare failed for claim %v: %v", claimUID, err)
 	}
 
@@ -231,16 +245,46 @@ func (s *DeviceState) prepareDevices(claim *resourceapi.ResourceClaim) (Prepared
 	return preparedDevices, nil
 }
 
-func (s *DeviceState) unprepareDevices(claimUID string) error {
-	// remove all files in "/tmp/tpu_logs"
-	// Removing all of the log files on un-prepare is fine as the expectation
-	// is that a workload requests all TPUs. Revisit this if that assumption
-	// changes.
-	if err := RemoveDirContents(libtpuLogDir); err != nil {
-		err = fmt.Errorf("failed to delete files in %s: %w", libtpuLogDir, err)
-		return err
+// unprepareDevices tears down the node-level state that this claim was using.
+//
+// The libtpu log directory is a single host path shared by every claim on the
+// node, and it is tailed by the log collector sidecar. Removing its contents on
+// every unprepare is only safe while a single claim can hold the chips. When
+// consumable shares is enabled, the contents are removed by whichever claim is
+// the last one out.
+func (s *DeviceState) unprepareDevices(claimUID string, checkpoint *Checkpoint) error {
+	logDir := s.logDir()
+	if s.sharesPolicy.enabled && hasOtherPreparedClaims(checkpoint, claimUID) {
+		klog.V(4).Infof("unprepare: TPU chips are still held by other claims, keeping %s for claim %v",
+			logDir, claimUID)
+		return nil
+	}
+
+	// remove all files in the libtpu log directory
+	if err := RemoveDirContents(logDir); err != nil {
+		return fmt.Errorf("failed to delete files in %s: %w", logDir, err)
 	}
 	return nil
+}
+
+// hasOtherPreparedClaims reports whether a claim other than claimUID is still
+// checkpointed as prepared.
+//
+// Every claim on a TPU node is allocated every chip on it, so the number of
+// prepared claims is a sufficient reference count for the chips; there is no
+// need to track which claim holds which device. Unprepare deletes the claim
+// from the checkpoint only after teardown succeeds, so the claim being torn
+// down is still present here and has to be skipped explicitly.
+func hasOtherPreparedClaims(checkpoint *Checkpoint, claimUID string) bool {
+	if checkpoint == nil || checkpoint.V1 == nil {
+		return false
+	}
+	for uid := range checkpoint.V1.PreparedClaims {
+		if uid != claimUID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *DeviceState) getDeviceContainerEdits(results []resourceapi.DeviceRequestAllocationResult) (PerDeviceCDIContainerEdits, error) {
