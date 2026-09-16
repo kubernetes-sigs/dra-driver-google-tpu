@@ -17,12 +17,21 @@ limitations under the License.
 package main
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	resourceapi "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/dynamic-resource-allocation/kubeletplugin"
+	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager"
+	"sigs.k8s.io/yaml"
+	cdiapi "tags.cncf.io/container-device-interface/pkg/cdi"
+	cdispec "tags.cncf.io/container-device-interface/specs-go"
 )
 
 const foreignDriverName = "example.com/nic"
@@ -318,5 +327,193 @@ func TestUnprepareDevicesOnMultiHostNode(t *testing.T) {
 
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Error("a multi-host node should keep the pre-feature teardown behavior and wipe the log dir")
+	}
+}
+
+func claimSpecPath(cdiDir, claimUID string) string {
+	specName := cdiapi.GenerateTransientSpecName(cdiVendor, cdiClass, claimUID)
+	return filepath.Join(cdiDir, specName+".yaml")
+}
+
+func newTestDeviceStateWithDirs(t *testing.T, pluginDir, cdiDir string, chipCount int, deviceNames ...string) *DeviceState {
+	t.Helper()
+	state := tpuDeviceState(chipCount, deviceNames...)
+
+	cdi, err := NewCDIHandler(&Config{flags: &Flags{cdiRoot: cdiDir}})
+	if err != nil {
+		t.Fatalf("NewCDIHandler: %v", err)
+	}
+	state.cdi = cdi
+
+	cpm, err := checkpointmanager.NewCheckpointManager(pluginDir)
+	if err != nil {
+		t.Fatalf("NewCheckpointManager: %v", err)
+	}
+	state.checkpointManager = cpm
+
+	checkpoints, err := cpm.ListCheckpoints()
+	if err != nil {
+		t.Fatalf("ListCheckpoints: %v", err)
+	}
+	if !slices.Contains(checkpoints, DriverPluginCheckpointFile) {
+		if err := cpm.CreateCheckpoint(DriverPluginCheckpointFile, newCheckpoint()); err != nil {
+			t.Fatalf("CreateCheckpoint: %v", err)
+		}
+	}
+
+	return state
+}
+
+func assertDevicesEqual(t *testing.T, a, b []kubeletplugin.Device) {
+	t.Helper()
+	if len(a) != len(b) {
+		t.Fatalf("device count mismatch: got %d, want %d", len(a), len(b))
+	}
+	for i := range a {
+		if !slices.Equal(a[i].Requests, b[i].Requests) {
+			t.Errorf("device[%d] requests = %v, want %v", i, a[i].Requests, b[i].Requests)
+		}
+		if a[i].DeviceName != b[i].DeviceName {
+			t.Errorf("device[%d] name = %q, want %q", i, a[i].DeviceName, b[i].DeviceName)
+		}
+		if a[i].PoolName != b[i].PoolName {
+			t.Errorf("device[%d] pool = %q, want %q", i, a[i].PoolName, b[i].PoolName)
+		}
+		if !slices.Equal(a[i].CDIDeviceIDs, b[i].CDIDeviceIDs) {
+			t.Errorf("device[%d] CDI IDs = %v, want %v", i, a[i].CDIDeviceIDs, b[i].CDIDeviceIDs)
+		}
+	}
+}
+
+func assertClaimSpecResolvesPreparedDevices(t *testing.T, cdiDir string, claimUID string, prepared []kubeletplugin.Device) {
+	t.Helper()
+	specPath := claimSpecPath(cdiDir, claimUID)
+	specBytes, err := os.ReadFile(specPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", specPath, err)
+	}
+
+	var spec cdispec.Spec
+	if err := yaml.Unmarshal(specBytes, &spec); err != nil {
+		t.Fatalf("Unmarshal CDI spec: %v", err)
+	}
+	if spec.Kind != cdiKind {
+		t.Errorf("spec.Kind = %q, want %q", spec.Kind, cdiKind)
+	}
+
+	specDevices := make(map[string]cdispec.Device)
+	for _, dev := range spec.Devices {
+		specDevices[dev.Name] = dev
+	}
+
+	for _, dev := range prepared {
+		expectedCDIName := fmt.Sprintf("%s-%s", claimUID, dev.DeviceName)
+		if _, ok := specDevices[expectedCDIName]; !ok {
+			t.Errorf("expected CDI device %q not found in CDI spec %s", expectedCDIName, specPath)
+		}
+	}
+}
+
+func TestPrepareRestoredClaimRecreatesMissingClaimSpec(t *testing.T) {
+	pluginDir := t.TempDir()
+	cdiDir := t.TempDir()
+	state := newTestDeviceStateWithDirs(t, pluginDir, cdiDir, 2, "tpu0", "tpu1")
+
+	claim := claimWithResults(
+		result(DriverName, "tpu-pool", "tpu0", "tpus"),
+		result(DriverName, "tpu-pool", "tpu1", "tpus"),
+	)
+
+	prepared, err := state.Prepare(context.Background(), claim)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if len(prepared) != 2 {
+		t.Fatalf("prepared %d devices, want 2", len(prepared))
+	}
+	assertClaimSpecResolvesPreparedDevices(t, cdiDir, string(claim.UID), prepared)
+
+	// Simulate node reboot or transient directory wipe by removing the CDI spec file.
+	specPath := claimSpecPath(cdiDir, string(claim.UID))
+	if err := os.Remove(specPath); err != nil {
+		t.Fatalf("Remove(%s): %v", specPath, err)
+	}
+
+	// Create a new DeviceState instance sharing the checkpoint directory to simulate plugin restart.
+	restartedState := newTestDeviceStateWithDirs(t, pluginDir, cdiDir, 2, "tpu0", "tpu1")
+	restored, err := restartedState.Prepare(context.Background(), claim)
+	if err != nil {
+		t.Fatalf("Prepare on restarted state: %v", err)
+	}
+
+	assertDevicesEqual(t, prepared, restored)
+	assertClaimSpecResolvesPreparedDevices(t, cdiDir, string(claim.UID), restored)
+}
+
+func TestPrepareRestoredClaimIsIdempotentWhenClaimSpecExists(t *testing.T) {
+	pluginDir := t.TempDir()
+	cdiDir := t.TempDir()
+	state := newTestDeviceStateWithDirs(t, pluginDir, cdiDir, 2, "tpu0", "tpu1")
+
+	claim := claimWithResults(
+		result(DriverName, "tpu-pool", "tpu0", "tpus"),
+		result(DriverName, "tpu-pool", "tpu1", "tpus"),
+	)
+
+	prepared, err := state.Prepare(context.Background(), claim)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if len(prepared) != 2 {
+		t.Fatalf("prepared %d devices, want 2", len(prepared))
+	}
+	assertClaimSpecResolvesPreparedDevices(t, cdiDir, string(claim.UID), prepared)
+
+	// Re-prepare when the CDI spec file already exists.
+	restartedState := newTestDeviceStateWithDirs(t, pluginDir, cdiDir, 2, "tpu0", "tpu1")
+	restored, err := restartedState.Prepare(context.Background(), claim)
+	if err != nil {
+		t.Fatalf("Prepare idempotent call: %v", err)
+	}
+
+	assertDevicesEqual(t, prepared, restored)
+	assertClaimSpecResolvesPreparedDevices(t, cdiDir, string(claim.UID), restored)
+}
+
+func TestPrepareRestoredClaimFailsWhenClaimSpecCannotBeRecreated(t *testing.T) {
+	pluginDir := t.TempDir()
+	cdiDir := t.TempDir()
+	state := newTestDeviceStateWithDirs(t, pluginDir, cdiDir, 2, "tpu0", "tpu1")
+
+	claim := claimWithResults(
+		result(DriverName, "tpu-pool", "tpu0", "tpus"),
+		result(DriverName, "tpu-pool", "tpu1", "tpus"),
+	)
+
+	_, err := state.Prepare(context.Background(), claim)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	specPath := claimSpecPath(cdiDir, string(claim.UID))
+	if err := os.Remove(specPath); err != nil {
+		t.Fatalf("Remove(%s): %v", specPath, err)
+	}
+
+	// Create a directory at the spec file path so that recreating the spec file fails.
+	if err := os.Mkdir(specPath, 0750); err != nil {
+		t.Fatalf("Mkdir(%s): %v", specPath, err)
+	}
+
+	restartedState := newTestDeviceStateWithDirs(t, pluginDir, cdiDir, 2, "tpu0", "tpu1")
+	restored, err := restartedState.Prepare(context.Background(), claim)
+	if err == nil {
+		t.Fatal("expected Prepare to fail when CDI spec cannot be recreated, got nil error")
+	}
+	if !strings.Contains(err.Error(), "unable to recreate CDI spec file for claim") {
+		t.Errorf("error %q does not contain expected substring", err.Error())
+	}
+	if restored != nil {
+		t.Errorf("expected nil restored devices, got %v", restored)
 	}
 }

@@ -135,9 +135,12 @@ func (s *DeviceState) Prepare(ctx context.Context, claim *resourceapi.ResourceCl
 	}
 
 	preparedClaims := checkpoint.V1.PreparedClaims
-	if preparedClaims[claimUID] != nil {
-		klog.Infof("skip prepare: claim %v already exists in checkpoint", claimUID)
-		return preparedClaims[claimUID].GetDevices(), nil
+	if restoredDevices := preparedClaims[claimUID]; restoredDevices != nil {
+		klog.Infof("restoring claim %v from checkpoint", claimUID)
+		if err := s.cdi.CreateClaimSpecFile(claimUID, restoredDevices); err != nil {
+			return nil, fmt.Errorf("unable to recreate CDI spec file for claim %v from checkpoint: %w", claimUID, err)
+		}
+		return restoredDevices.GetDevices(), nil
 	}
 
 	preparedDevices, err := s.prepareDevices(claim)
