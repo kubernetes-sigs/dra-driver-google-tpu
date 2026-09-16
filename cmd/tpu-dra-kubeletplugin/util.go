@@ -795,17 +795,13 @@ func labelsFromNode(ctx context.Context, config *Config) (map[string]string, err
 	return normalizeTPULabels(node.Labels), nil
 }
 
-// getTPUNodeLabels describes the TPU of the local node with the canonical
-// labels. Sources are tried in order of decreasing precedence so that an
-// explicit configuration always wins over auto discovery, and whatever is left
-// unknown is completed from hardware, which the caller has already probed so
-// that the fail-fast check on a node without a TPU happens once, right at the
-// entry point of NewDriver (driver.go).
-func getTPUNodeLabels(ctx context.Context, config *Config, hardware *tpuHardware) (map[string]string, error) {
-	sources := []struct {
-		name string
-		get  func(context.Context) (map[string]string, error)
-	}{
+type tpuLabelSource struct {
+	name string
+	get  func(context.Context) (map[string]string, error)
+}
+
+func defaultTPULabelSources(config *Config) []tpuLabelSource {
+	return []tpuLabelSource{
 		{"driver configuration", func(context.Context) (map[string]string, error) {
 			return labelsFromConfig(config.flags)
 		}},
@@ -817,7 +813,19 @@ func getTPUNodeLabels(ctx context.Context, config *Config, hardware *tpuHardware
 			return labelsFromNode(ctx, config)
 		}},
 	}
+}
 
+// getTPUNodeLabels describes the TPU of the local node with the canonical
+// labels. Sources are tried in order of decreasing precedence so that an
+// explicit configuration always wins over auto discovery, and whatever is left
+// unknown is completed from hardware, which the caller has already probed so
+// that the fail-fast check on a node without a TPU happens once, right at the
+// entry point of NewDriver (driver.go).
+func getTPUNodeLabels(ctx context.Context, config *Config, hardware *tpuHardware) (map[string]string, error) {
+	return getTPUNodeLabelsFromSources(ctx, defaultTPULabelSources(config), hardware)
+}
+
+func getTPUNodeLabelsFromSources(ctx context.Context, sources []tpuLabelSource, hardware *tpuHardware) (map[string]string, error) {
 	labels := map[string]string{}
 	for _, source := range sources {
 		found, err := source.get(ctx)
