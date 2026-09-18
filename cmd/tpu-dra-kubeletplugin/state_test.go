@@ -517,3 +517,86 @@ func TestPrepareRestoredClaimFailsWhenClaimSpecCannotBeRecreated(t *testing.T) {
 		t.Errorf("expected nil restored devices, got %v", restored)
 	}
 }
+
+// enumerate exactly two chips and run its checkpoint manager.
+func newDeviceStateFixture(t *testing.T) (*Config, map[string]string, string) {
+	t.Helper()
+	devDir := t.TempDir()
+	for _, name := range []string{"accel0", "accel1"} {
+		if err := os.WriteFile(filepath.Join(devDir, name), []byte{}, 0600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	config := &Config{flags: &Flags{
+		cdiRoot:                     t.TempDir(),
+		kubeletPluginsDirectoryPath: t.TempDir(),
+	}}
+	if err := os.MkdirAll(config.DriverPluginPath(), 0750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	labels := map[string]string{
+		AcceleratorLabel:      "tpu-v6e-slice",
+		AcceleratorCountLabel: "2",
+		TopologyLabel:         "2x2",
+	}
+	return config, labels, devDir
+}
+
+func TestNewDeviceState(t *testing.T) {
+	config, labels, devDir := newDeviceStateFixture(t)
+
+	state, err := NewDeviceState(config, labels, devDir, make(chan interface{}, 1), consumableSharesPolicy{})
+	if err != nil {
+		t.Fatalf("NewDeviceState: %v", err)
+	}
+	if len(state.allocatable) != 2 {
+		t.Errorf("allocatable devices = %d, want 2", len(state.allocatable))
+	}
+
+	// A checkpoint should now exist and be listable.
+	cps, err := state.checkpointManager.ListCheckpoints()
+	if err != nil {
+		t.Fatalf("ListCheckpoints: %v", err)
+	}
+	found := false
+	for _, c := range cps {
+		if c == DriverPluginCheckpointFile {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected %s checkpoint to be created", DriverPluginCheckpointFile)
+	}
+}
+
+// When a checkpoint already exists, NewDeviceState must reuse it and leave the
+// stored PreparedClaims intact rather than overwriting with a fresh checkpoint.
+func TestNewDeviceStateReusesExistingCheckpoint(t *testing.T) {
+	config, labels, devDir := newDeviceStateFixture(t)
+
+	// First call creates the checkpoint.
+	state, err := NewDeviceState(config, labels, devDir, make(chan interface{}, 1), consumableSharesPolicy{})
+	if err != nil {
+		t.Fatalf("NewDeviceState (first): %v", err)
+	}
+
+	// Seed a prepared claim into the existing checkpoint.
+	checkpoint := newCheckpoint()
+	checkpoint.V1.PreparedClaims["claim-uid"] = PreparedDevices{}
+	if err := state.checkpointManager.CreateCheckpoint(DriverPluginCheckpointFile, checkpoint); err != nil {
+		t.Fatalf("CreateCheckpoint: %v", err)
+	}
+
+	// Second call must take the reuse branch, not clobber the checkpoint.
+	if _, err = NewDeviceState(config, labels, devDir, make(chan interface{}, 1), consumableSharesPolicy{}); err != nil {
+		t.Fatalf("NewDeviceState (reuse): %v", err)
+	}
+
+	got := newCheckpoint()
+	if err := state.checkpointManager.GetCheckpoint(DriverPluginCheckpointFile, got); err != nil {
+		t.Fatalf("GetCheckpoint: %v", err)
+	}
+	if _, ok := got.V1.PreparedClaims["claim-uid"]; !ok {
+		t.Errorf("reuse path overwrote checkpoint; seeded claim missing, got %v", got.V1.PreparedClaims)
+	}
+}

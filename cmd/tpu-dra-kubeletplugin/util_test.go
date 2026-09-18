@@ -793,3 +793,74 @@ func TestGetTPUNodeLabelsWithConfig(t *testing.T) {
 		t.Errorf("AcceleratorLabel = %q, want %q", labels[AcceleratorLabel], "tpu-v6e-slice")
 	}
 }
+
+func TestLabelsFromNodeNoClient(t *testing.T) {
+	// Without a client or node name this must fail closed rather than panic.
+	if _, err := labelsFromNode(context.Background(), &Config{flags: &Flags{}}); err == nil {
+		t.Error("expected error when no Kubernetes client is available")
+	}
+}
+
+func TestGetTPUNodeLabels(t *testing.T) {
+	tests := []struct {
+		name     string
+		flags    *Flags
+		hardware *tpuHardware
+		want     map[string]string
+		wantErr  bool
+	}{
+		{
+			name: "config supplies every label",
+			flags: &Flags{
+				tpuAccelerator:   "tpu-v6e-slice",
+				tpuChipCount:     "4",
+				tpuTopology:      "2x2",
+				tpuICIResiliency: "true",
+			},
+			hardware: &tpuHardware{devDirectory: "/dev", chipCount: 4},
+			want: map[string]string{
+				AcceleratorLabel:      "tpu-v6e-slice",
+				AcceleratorCountLabel: "4",
+				TopologyLabel:         "2x2",
+				ICIResiliency:         "true",
+			},
+		},
+		{
+			name: "config sets accelerator, count completed from hardware",
+			flags: &Flags{
+				tpuAccelerator: "tpu-v6e-slice",
+				tpuTopology:    "2x2",
+			},
+			hardware: &tpuHardware{devDirectory: "/dev", chipCount: 4},
+			want: map[string]string{
+				AcceleratorLabel:      "tpu-v6e-slice",
+				AcceleratorCountLabel: "4",
+				TopologyLabel:         "2x2",
+			},
+		},
+		{
+			name:     "no source knows the accelerator",
+			flags:    &Flags{},
+			hardware: &tpuHardware{devDirectory: "/dev", chipCount: 4},
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			labels, err := getTPUNodeLabels(context.Background(), &Config{flags: tt.flags}, tt.hardware)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("getTPUNodeLabels: %v", err)
+			}
+			if !reflect.DeepEqual(labels, tt.want) {
+				t.Errorf("labels = %v, want %v", labels, tt.want)
+			}
+		})
+	}
+}
