@@ -793,3 +793,10 @@ func TestGetTPUNodeLabelsWithConfig(t *testing.T) {
 		t.Errorf("AcceleratorLabel = %q, want %q", labels[AcceleratorLabel], "tpu-v6e-slice")
 	}
 }
+
+func TestLabelsFromNodeNoClient(t *testing.T) {
+	// Without a client or node name this must fail closed rather than panic.
+	if _, err := labelsFromNode(context.Background(), &Config{flags: &Flags{}}); err == nil {
+		t.Error("expected error when no Kubernetes client is available")
+	}
+}
