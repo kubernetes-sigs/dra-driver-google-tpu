@@ -18,12 +18,19 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager"
 )
+
+func TestHandleError(t *testing.T) {
+	// Smoke test: HandleError must not panic on a nil-safe driver.
+	d := &driver{}
+	d.HandleError(context.Background(), errors.New("boom"), "while testing")
+}
 
 // driverWithState assembles a driver backed by a real (temp-dir) checkpoint
 // manager and CDI handler, so Prepare/Unprepare exercise their full path

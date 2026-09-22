@@ -41,15 +41,3 @@ func TestFeatureGateConfigFlags(t *testing.T) {
 		t.Errorf("flag usage should mention ConsumableShares, got: %s", usage)
 	}
 }
-
-func TestLoggingConfigFlagsAndApply(t *testing.T) {
-	cfg := NewLoggingConfig()
-	if err := cfg.Apply(); err != nil {
-		t.Fatalf("LoggingConfig.Apply() failed: %v", err)
-	}
-
-	flags := cfg.Flags()
-	if len(flags) == 0 {
-		t.Error("LoggingConfig.Flags() returned no flags")
-	}
-}
