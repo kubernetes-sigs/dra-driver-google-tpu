@@ -800,3 +800,288 @@ func TestLabelsFromNodeNoClient(t *testing.T) {
 		t.Error("expected error when no Kubernetes client is available")
 	}
 }
+
+func TestCubeOrLarger(t *testing.T) {
+	tests := []struct {
+		name string
+		dims []int64
+		want bool
+	}{
+		{name: "all dims >= 4", dims: []int64{4, 4, 4}, want: true},
+		{name: "larger than cube", dims: []int64{8, 4, 16}, want: true},
+		{name: "one dim below 4", dims: []int64{4, 2, 4}, want: false},
+		{name: "all dims below 4", dims: []int64{2, 2, 1}, want: false},
+		{name: "empty dims is vacuously true", dims: nil, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cubeOrLarger(tt.dims); got != tt.want {
+				t.Errorf("cubeOrLarger(%v) = %v, want %v", tt.dims, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWrap(t *testing.T) {
+	tests := []struct {
+		name    string
+		gen     string
+		dims    []int64
+		want    string
+		wantErr bool
+	}{
+		{name: "v4 cube wraps around", gen: "v4", dims: []int64{4, 4, 4}, want: "true,true,true"},
+		{name: "v5p sub-cube does not wrap", gen: "v5p", dims: []int64{2, 2, 1}, want: "false,false,false"},
+		{name: "v6e wraps only at the max dim", gen: "v6e", dims: []int64{vlpMaxTopologyDim, 2, vlpMaxTopologyDim}, want: "true,false,true"},
+		{name: "v6e below max does not wrap", gen: "v6e", dims: []int64{2, 2, 2}, want: "false,false,false"},
+		{name: "unknown generation errors", gen: "v99", dims: []int64{4, 4, 4}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := wrap(tt.gen, tt.dims)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("wrap(%q) expected error, got nil", tt.gen)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("wrap(%q) error = %v", tt.gen, err)
+			}
+			if got != tt.want {
+				t.Errorf("wrap(%q, %v) = %q, want %q", tt.gen, tt.dims, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAddSingleHostEnvs(t *testing.T) {
+	envs := map[string]string{"EXISTING": "keep"}
+	addSingleHostEnvs(envs)
+	if envs["TPU_WORKER_ID"] != "0" {
+		t.Errorf("TPU_WORKER_ID = %q, want 0", envs["TPU_WORKER_ID"])
+	}
+	if envs["TPU_WORKER_HOSTNAMES"] != "localhost" {
+		t.Errorf("TPU_WORKER_HOSTNAMES = %q, want localhost", envs["TPU_WORKER_HOSTNAMES"])
+	}
+	if envs["EXISTING"] != "keep" {
+		t.Errorf("addSingleHostEnvs clobbered existing env: %v", envs)
+	}
+}
+
+func TestNumCores(t *testing.T) {
+	tests := []struct {
+		name    string
+		gen     string
+		dims    []int64
+		want    int
+		wantErr bool
+	}{
+		{name: "lite gen is 1 core per chip", gen: "v4lite", dims: []int64{2, 2, 1}, want: 4},
+		{name: "v6e is treated as lite", gen: "v6e", dims: []int64{2, 2, 1}, want: 4},
+		{name: "non-lite is 2 cores per chip", gen: "v4", dims: []int64{2, 2, 1}, want: 8},
+		{name: "invalid topology errors", gen: "v4", dims: []int64{0, 2}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := numCores(tt.gen, tt.dims)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("numCores(%q, %v) expected error", tt.gen, tt.dims)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("numCores error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("numCores(%q, %v) = %d, want %d", tt.gen, tt.dims, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConvertAcceleratorType(t *testing.T) {
+	got, err := convertAcceleratorType("v4", []int64{2, 2, 1})
+	if err != nil {
+		t.Fatalf("convertAcceleratorType error = %v", err)
+	}
+	if got != "v4-8" {
+		t.Errorf("convertAcceleratorType(v4) = %q, want v4-8", got)
+	}
+	if _, err := convertAcceleratorType("v4", []int64{0, 2}); err == nil {
+		t.Error("convertAcceleratorType with invalid topology expected error")
+	}
+}
+
+func TestLabelsFromConfig(t *testing.T) {
+	labels, err := labelsFromConfig(&Flags{
+		tpuAccelerator:   "tpu-v6e-slice",
+		tpuChipCount:     "4",
+		tpuTopology:      "2x2",
+		tpuICIResiliency: "true",
+	})
+	if err != nil {
+		t.Fatalf("labelsFromConfig error = %v", err)
+	}
+	want := map[string]string{
+		AcceleratorLabel:      "tpu-v6e-slice",
+		AcceleratorCountLabel: "4",
+		TopologyLabel:         "2x2",
+		ICIResiliency:         "true",
+	}
+	if !reflect.DeepEqual(labels, want) {
+		t.Errorf("labelsFromConfig = %v, want %v", labels, want)
+	}
+
+	if _, err := labelsFromConfig(&Flags{}); err == nil {
+		t.Error("labelsFromConfig with no accelerator expected error")
+	}
+}
+
+func TestMapTpuEnvToLabels(t *testing.T) {
+	tests := []struct {
+		name   string
+		envMap map[string]string
+		want   map[string]string
+	}{
+		{
+			name: "v6e with explicit bounds and topology",
+			envMap: map[string]string{
+				"ACCELERATOR_TYPE":      "v6e-16",
+				"CHIPS_PER_HOST_BOUNDS": "2,2,1",
+				"TOPOLOGY":              "4x4",
+				"ENABLE_ICI_RESILIENCY": "true",
+			},
+			want: map[string]string{
+				AcceleratorLabel:      "tpu-v6e-slice",
+				AcceleratorCountLabel: "4",
+				TopologyLabel:         "4x4",
+				ICIResiliency:         "true",
+			},
+		},
+		{
+			name:   "TYPE fallback and default chip/topology",
+			envMap: map[string]string{"TYPE": "v5litepod-8"},
+			want: map[string]string{
+				AcceleratorLabel:      "tpu-v5-lite-podslice",
+				AcceleratorCountLabel: "4",
+				TopologyLabel:         "2x2",
+				ICIResiliency:         "",
+			},
+		},
+		{
+			name:   "v5lite non-pod device",
+			envMap: map[string]string{"ACCELERATOR_TYPE": "v5lite-8"},
+			want: map[string]string{
+				AcceleratorLabel:      "tpu-v5-lite-device",
+				AcceleratorCountLabel: "4",
+				TopologyLabel:         "2x2",
+				ICIResiliency:         "",
+			},
+		},
+		{
+			name:   "v5p slice",
+			envMap: map[string]string{"ACCELERATOR_TYPE": "v5p-16"},
+			want: map[string]string{
+				AcceleratorLabel:      "tpu-v5p-slice",
+				AcceleratorCountLabel: "4",
+				TopologyLabel:         "2x2",
+				ICIResiliency:         "",
+			},
+		},
+		{
+			name:   "v4 podslice",
+			envMap: map[string]string{"ACCELERATOR_TYPE": "v4-8"},
+			want: map[string]string{
+				AcceleratorLabel:      "tpu-v4-podslice",
+				AcceleratorCountLabel: "4",
+				TopologyLabel:         "2x2",
+				ICIResiliency:         "",
+			},
+		},
+		{
+			name:   "v3 device",
+			envMap: map[string]string{"ACCELERATOR_TYPE": "v3-8"},
+			want: map[string]string{
+				AcceleratorLabel:      "tpu-v3-device",
+				AcceleratorCountLabel: "4",
+				TopologyLabel:         "2x2",
+				ICIResiliency:         "",
+			},
+		},
+		{
+			name:   "unknown type falls back to lowercased value",
+			envMap: map[string]string{"ACCELERATOR_TYPE": "V9-Custom"},
+			want: map[string]string{
+				AcceleratorLabel:      "v9-custom",
+				AcceleratorCountLabel: "4",
+				TopologyLabel:         "2x2",
+				ICIResiliency:         "",
+			},
+		},
+		{
+			name:   "no accelerator type returns nil",
+			envMap: map[string]string{"TOPOLOGY": "2x2"},
+			want:   nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mapTpuEnvToLabels(tt.envMap)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("mapTpuEnvToLabels = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLabelsFromTPUEnvFile(t *testing.T) {
+	// writeFile is a helper that materializes tpu-env content and returns its path.
+	writeFile := func(t *testing.T, content string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "tpu-env")
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		return path
+	}
+
+	tests := []struct {
+		name      string
+		path      string
+		wantErr   bool
+		wantAccel string
+		wantTopo  string
+	}{
+		{name: "empty path fails closed", path: "", wantErr: true},
+		{name: "missing file surfaces read error", path: filepath.Join(t.TempDir(), "missing"), wantErr: true},
+		{name: "non-TPU file is rejected", path: writeFile(t, "FOO: bar\n"), wantErr: true},
+		{
+			name:      "well-formed tpu-env yields canonical labels",
+			path:      writeFile(t, "ACCELERATOR_TYPE: 'v6e-16'\nTOPOLOGY: '4x4'\nCHIPS_PER_HOST_BOUNDS: '2,2,1'\n"),
+			wantAccel: "tpu-v6e-slice",
+			wantTopo:  "4x4",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			labels, err := labelsFromTPUEnvFile(tt.path)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("labelsFromTPUEnvFile(%q) expected error, got nil", tt.path)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("labelsFromTPUEnvFile error = %v", err)
+			}
+			if labels[AcceleratorLabel] != tt.wantAccel {
+				t.Errorf("AcceleratorLabel = %q, want %q", labels[AcceleratorLabel], tt.wantAccel)
+			}
+			if labels[TopologyLabel] != tt.wantTopo {
+				t.Errorf("TopologyLabel = %q, want %q", labels[TopologyLabel], tt.wantTopo)
+			}
+		})
+	}
+}

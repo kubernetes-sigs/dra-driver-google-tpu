@@ -602,3 +602,47 @@ func TestNewDeviceStateReusesExistingCheckpoint(t *testing.T) {
 		t.Errorf("reuse path overwrote checkpoint; seeded claim missing, got %v", got.V1.PreparedClaims)
 	}
 }
+
+func TestUpdateHealth(t *testing.T) {
+	tests := []struct {
+		name        string
+		device      string
+		newHealth   bool // tpu0 starts allocatable (healthy)
+		wantErr     bool
+		wantSignal  bool
+		wantHealthy bool
+	}{
+		{name: "unknown device errors", device: "missing", newHealth: false, wantErr: true},
+		{name: "health unchanged sends no signal", device: "tpu0", newHealth: true, wantSignal: false, wantHealthy: true},
+		{name: "health change updates state and signals", device: "tpu0", newHealth: false, wantSignal: true, wantHealthy: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := tpuDeviceState(1, "tpu0")
+			s.publishchan = make(chan interface{}, 1)
+
+			err := s.UpdateHealth(tt.device, tt.newHealth)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("UpdateHealth(%q) expected error, got nil", tt.device)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("UpdateHealth: %v", err)
+			}
+			if s.allocatable[tt.device].allocatable != tt.wantHealthy {
+				t.Errorf("device healthy = %v, want %v", s.allocatable[tt.device].allocatable, tt.wantHealthy)
+			}
+			var gotSignal bool
+			select {
+			case <-s.publishchan:
+				gotSignal = true
+			default:
+			}
+			if gotSignal != tt.wantSignal {
+				t.Errorf("publish signal = %v, want %v", gotSignal, tt.wantSignal)
+			}
+		})
+	}
+}
