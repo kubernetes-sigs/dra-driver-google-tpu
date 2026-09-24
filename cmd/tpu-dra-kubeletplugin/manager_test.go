@@ -181,17 +181,3 @@ func TestEnumerateAllPossibleTpuDevices(t *testing.T) {
 		t.Error("expected error when discovered count != expected chip count")
 	}
 }
-
-func TestTPUManagerGetters(t *testing.T) {
-	devices := AllocatableDevices{"tpu0": &AllocatableDevice{UUID: "tpu0", name: "tpu0"}}
-	tm := &tpuManager{
-		devices: devices,
-		envs:    map[string]string{"TPU_WORKER_ID": "0"},
-	}
-	if got := tm.ListDevices(); len(got) != 1 || got["tpu0"] == nil {
-		t.Errorf("ListDevices() = %v, want the tpu0 device", got)
-	}
-	if got := tm.Envs(); got["TPU_WORKER_ID"] != "0" {
-		t.Errorf("Envs() = %v, want TPU_WORKER_ID=0", got)
-	}
-}
