@@ -235,11 +235,6 @@ func hash(s string) int64 {
 	return h
 }
 
-// ListDevices lists all physical TPU devices available on this node.
-func (tm *tpuManager) ListDevices() AllocatableDevices {
-	return tm.devices
-}
-
 // DeviceSpec returns the device spec that inclues list of devices to allocate for a deviceID.
 func (tm *tpuManager) DeviceNodeContainerEdits(deviceID string) []*cdispec.DeviceNode {
 	deviceNodes := make([]*cdispec.DeviceNode, 0)
@@ -258,10 +253,6 @@ func (tm *tpuManager) DeviceNodeContainerEdits(deviceID string) []*cdispec.Devic
 		})
 	}
 	return deviceNodes
-}
-
-func (tm *tpuManager) Envs() map[string]string {
-	return tm.envs
 }
 
 // Validate the container requesting for TPUs. Make sure partial TPU chips are not requested.
