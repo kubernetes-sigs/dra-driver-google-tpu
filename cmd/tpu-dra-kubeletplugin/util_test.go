@@ -515,6 +515,49 @@ func TestApplyNetworkSettings(t *testing.T) {
 			t.Fatal("applyNetworkSettings() returned nil, want error when writes fail")
 		}
 	})
+
+	t.Run("continues after a failed write and aggregates failures", func(t *testing.T) {
+		if len(networkSettings) < 3 {
+			t.Fatalf("test needs at least 3 network settings, have %d", len(networkSettings))
+		}
+		root := t.TempDir()
+		for _, s := range networkSettings {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(root, s.FilePath)), 0755); err != nil {
+				t.Fatalf("failed to create dir for %s: %v", s.FilePath, err)
+			}
+		}
+		// A directory in the file's place forces that write to fail.
+		failPaths := []string{
+			filepath.Join(root, networkSettings[0].FilePath),
+			filepath.Join(root, networkSettings[1].FilePath),
+		}
+		for _, p := range failPaths {
+			if err := os.MkdirAll(p, 0755); err != nil {
+				t.Fatalf("failed to block path %s: %v", p, err)
+			}
+		}
+
+		err := applyNetworkSettings(root)
+		if err == nil {
+			t.Fatal("applyNetworkSettings() = nil, want aggregated error")
+		}
+		for _, p := range failPaths {
+			if !strings.Contains(err.Error(), p) {
+				t.Errorf("error %q does not report failed path %q", err.Error(), p)
+			}
+		}
+
+		for _, s := range networkSettings[2:] {
+			got, readErr := os.ReadFile(filepath.Join(root, s.FilePath))
+			if readErr != nil {
+				t.Errorf("setting %s not written after earlier failures: %v", s.FilePath, readErr)
+				continue
+			}
+			if string(got) != s.Value {
+				t.Errorf("setting %s = %q, want %q", s.FilePath, string(got), s.Value)
+			}
+		}
+	})
 }
 
 func TestIsSingleHostNode(t *testing.T) {
@@ -1081,6 +1124,31 @@ func TestLabelsFromTPUEnvFile(t *testing.T) {
 			}
 			if labels[TopologyLabel] != tt.wantTopo {
 				t.Errorf("TopologyLabel = %q, want %q", labels[TopologyLabel], tt.wantTopo)
+			}
+		})
+	}
+}
+
+func TestGetChipsPerHostBounds(t *testing.T) {
+	tests := []struct {
+		name               string
+		requestedChipCount int
+		want               string
+		wantErr            bool
+	}{
+		{name: "single chip", requestedChipCount: 1, want: "1,1,1"},
+		{name: "eight chips", requestedChipCount: 8, want: "2,4,1"},
+		{name: "unsupported count errors", requestedChipCount: 3, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := getChipsPerHostBounds(tt.requestedChipCount)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("getChipsPerHostBounds() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("getChipsPerHostBounds(%d) = %q, want %q", tt.requestedChipCount, got, tt.want)
 			}
 		})
 	}
