@@ -2,10 +2,6 @@ name: Golang
 
 on:
   workflow_call:
-    inputs:
-      golang_version:
-        required: true
-        type: string
 
 jobs:
   check:
@@ -18,13 +14,10 @@ jobs:
     - name: Install Go
       uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
       with:
-        go-version: ${{ inputs.golang_version }}
+        go-version-file: go.mod
 
     - name: Lint
-      uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9
-      with:
-        version: latest
-        args: -v --timeout 5m
+      run: make lint
 
 
   test:
@@ -37,7 +30,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
-          go-version: ${{ inputs.golang_version }}
+          go-version-file: go.mod
       - name: Run Tests
         run: make test
 
@@ -51,6 +44,6 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
-          go-version: ${{ inputs.golang_version }}
+          go-version-file: go.mod
       - name: Run Build
         run: make build

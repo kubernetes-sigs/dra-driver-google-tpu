@@ -19,13 +19,19 @@ DIST_DIR ?= $(CURDIR)/dist
 RELEASE_TAG ?= $(shell git describe --tags --always --dirty)
 HELM ?= go run helm.sh/helm/v3/cmd/helm@v3.20.1
 
+# golangci-lint is pinned and installed per version under bin/, so CI and
+# local runs use the same release and a bump installs the new binary.
+GOLANGCI_LINT_VERSION := v2.15.0
+GOLANGCI_LINT_DIR := $(CURDIR)/bin/golangci-lint-$(GOLANGCI_LINT_VERSION)
+GOLANGCI_LINT := $(GOLANGCI_LINT_DIR)/golangci-lint
+
 include $(CURDIR)/common.mk
 
 CMDS := $(patsubst ./cmd/%/,%,$(sort $(dir $(wildcard ./cmd/*/))))
 CMD_TARGETS := $(patsubst %,cmd-%, $(CMDS))
 
 CHECK_TARGETS := lint helm-lint
-MAKE_TARGETS := binaries build check vendor fmt test test-e2e cmds coverage $(CHECK_TARGETS)
+MAKE_TARGETS := binaries build check vendor fmt test test-e2e cmds coverage install.lint $(CHECK_TARGETS)
 
 TARGETS := $(MAKE_TARGETS) $(CMD_TARGETS)
 
@@ -55,8 +61,18 @@ fmt:
 	go list -f '{{.Dir}}' $(MODULE)/... \
 		| xargs gofmt -s -l -w
 
-lint:
-	golangci-lint run ./...
+lint: $(GOLANGCI_LINT)
+	$(GOLANGCI_LINT) run ./...
+
+install.lint: $(GOLANGCI_LINT)
+
+$(GOLANGCI_LINT):
+	$(MKDIR) -p $(GOLANGCI_LINT_DIR)
+	export \
+		VERSION=$(GOLANGCI_LINT_VERSION) \
+		URL=https://raw.githubusercontent.com/golangci/golangci-lint \
+		BINDIR=$(GOLANGCI_LINT_DIR) && \
+	curl -sfL $$URL/$$VERSION/install.sh | sh -s $$VERSION
 
 helm-lint:
 	$(HELM) lint --strict deployments/helm/dra-driver-google-tpu
