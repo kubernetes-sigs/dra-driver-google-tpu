@@ -18,13 +18,17 @@ TR       ?= tr
 DIST_DIR ?= $(CURDIR)/dist
 RELEASE_TAG ?= $(shell git describe --tags --always --dirty)
 HELM ?= go run helm.sh/helm/v3/cmd/helm@v3.20.1
+BUILD_BIN_PATH ?= $(CURDIR)/bin
+ZIZMOR_VERSION ?= v1.30.0
+ZIZMOR_DIR := $(BUILD_BIN_PATH)/zizmor-$(ZIZMOR_VERSION)
+ZIZMOR := $(ZIZMOR_DIR)/zizmor
 
 include $(CURDIR)/common.mk
 
 CMDS := $(patsubst ./cmd/%/,%,$(sort $(dir $(wildcard ./cmd/*/))))
 CMD_TARGETS := $(patsubst %,cmd-%, $(CMDS))
 
-CHECK_TARGETS := lint helm-lint
+CHECK_TARGETS := lint helm-lint verify-zizmor
 MAKE_TARGETS := binaries build check vendor fmt test test-e2e cmds coverage $(CHECK_TARGETS)
 
 TARGETS := $(MAKE_TARGETS) $(CMD_TARGETS)
@@ -60,6 +64,35 @@ lint:
 
 helm-lint:
 	$(HELM) lint --strict deployments/helm/dra-driver-google-tpu
+
+# Lint the GitHub workflows. zizmor runs on the build host, so the download is
+# picked by the host OS/arch, not by GOOS (which defaults to linux here).
+verify-zizmor: $(ZIZMOR)
+	@if [ -x "$(ZIZMOR)" ]; then \
+		$(ZIZMOR) .github/workflows/; \
+	else \
+		echo "Skipping verify-zizmor: no zizmor binary for $$(uname -s)/$$(uname -m)."; \
+	fi
+
+$(ZIZMOR):
+	@set -e; \
+	case "$$(uname -s)/$$(uname -m)" in \
+		Linux/x86_64)  target=x86_64-unknown-linux-gnu  ;; \
+		Linux/aarch64) target=aarch64-unknown-linux-gnu ;; \
+		Darwin/x86_64) target=x86_64-apple-darwin       ;; \
+		Darwin/arm64)  target=aarch64-apple-darwin      ;; \
+		*) echo "skipping zizmor install: unsupported host $$(uname -s)/$$(uname -m)" >&2; \
+		   mkdir -p $(ZIZMOR_DIR); touch $(ZIZMOR); exit 0 ;; \
+	esac; \
+	tmp=$$(mktemp); \
+	trap 'rm -f "$$tmp"' EXIT; \
+	curl -sSfL --retry 5 --retry-delay 3 \
+		"https://github.com/zizmorcore/zizmor/releases/download/$(ZIZMOR_VERSION)/zizmor-$$target.tar.gz" \
+		-o "$$tmp"; \
+	mkdir -p $(ZIZMOR_DIR); \
+	tar -xzf "$$tmp" -C $(ZIZMOR_DIR) zizmor; \
+	chmod +x $(ZIZMOR); \
+	touch $(ZIZMOR)
 
 COVERAGE_FILE := coverage.out
 test: build cmds

@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   golang:
     uses: ./.github/workflows/golang.yaml
@@ -22,3 +26,15 @@ jobs:
 
   e2e:
     uses: ./.github/workflows/e2e.yaml
+
+  zizmor:
+    name: Zizmor
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      name: Checkout code
+      with:
+        persist-credentials: false
+
+    - name: Run zizmor
+      run: make verify-zizmor
