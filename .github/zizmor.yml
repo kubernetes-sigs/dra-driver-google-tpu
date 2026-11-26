@@ -1,0 +1,11 @@
+# Configuration for zizmor (https://docs.zizmor.sh), run by `make verify-zizmor`.
+rules:
+  # ci.yaml calls the reusable workflows as `./.github/workflows/*.yaml`.
+  # GitHub resolves a reusable workflow from the commit that triggered the run,
+  # before any job checks out code, so these references do not depend on
+  # runtime filesystem state, which is what this audit guards against. The `$/`
+  # self-repository syntax it suggests is new (July 2026); keep `./` until it is
+  # widely supported.
+  self-repository:
+    ignore:
+      - ci.yaml
